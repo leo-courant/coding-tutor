@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Coding Tutor settings",
+  "type": "object",
+  "properties": {
+    "voice": {
+      "description": "The voice that speaks the narration. Run \"Coding Tutor: Sample voices\" to hear them all.",
+      "enum": ["af_alloy", "af_aoede", "af_bella", "af_heart", "af_jessica", "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa", "bf_alice", "bf_emma", "bf_isabella", "bf_lily", "bm_daniel", "bm_fable", "bm_george", "bm_lewis"],
+      "default": "am_adam"
+    },
+    "defaultDepth": {
+      "description": "How much the narration says when you have not asked for a particular depth.",
+      "enum": ["skim", "outline", "walk", "line-by-line"],
+      "enumDescriptions": [
+        "One or two sentences on what was done and where.",
+        "Each function or file named, with what it is for and why it exists.",
+        "Inside each function: its main components, without reading lines.",
+        "Every line, including alternatives that were rejected."
+      ],
+      "default": "outline"
+    },
+    "language": { "description": "Narration language.", "enum": ["en"], "default": "en" },
+    "muted": { "description": "Captions only, no voice. The agent is still paced at reading speed.", "type": "boolean", "default": false },
+    "speed": { "description": "Speaking speed. 1.0 is normal.", "type": "number", "minimum": 0.5, "maximum": 2.0, "default": 1.0 }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "coding-tutor": {
+      "command": "python3",
+      "args": ["mcp/server.py"]
+    }
+  }
+}

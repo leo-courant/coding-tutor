@@ -1,0 +1,91 @@
+{
+  "name": "coding-tutor",
+  "displayName": "Coding Tutor",
+  "description": "Your coding agent explains the implementation aloud while it builds, pointing at the code as it goes.",
+  "version": "0.4.1",
+  "publisher": "coding-tutor",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Education",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codingTutor",
+          "title": "Coding Tutor",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "codingTutor": [
+        {
+          "id": "codingTutor.panel",
+          "name": "Narration",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "codingTutor.togglePause",
+        "title": "Coding Tutor: Pause or resume"
+      },
+      {
+        "command": "codingTutor.toggleMic",
+        "title": "Coding Tutor: Start or stop talking"
+      },
+      {
+        "command": "codingTutor.interrupt",
+        "title": "Coding Tutor: Say something to the agent"
+      },
+      {
+        "command": "codingTutor.toggleMute",
+        "title": "Coding Tutor: Mute or unmute the voice"
+      },
+      {
+        "command": "codingTutor.skip",
+        "title": "Coding Tutor: Skip what is being said"
+      },
+      {
+        "command": "codingTutor.sampleVoices",
+        "title": "Coding Tutor: Sample voices"
+      },
+      {
+        "command": "codingTutor.openSettings",
+        "title": "Coding Tutor: Open settings"
+      },
+      {
+        "command": "codingTutor.openTranscript",
+        "title": "Coding Tutor: Open the latest transcript"
+      }
+    ],
+    "jsonValidation": [
+      {
+        "fileMatch": "**/coding-tutor/config.json",
+        "url": "./schemas/config.schema.json"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "codingTutor.togglePause",
+        "key": "ctrl+alt+p",
+        "mac": "cmd+alt+p"
+      },
+      {
+        "command": "codingTutor.toggleMic",
+        "key": "ctrl+alt+m",
+        "mac": "cmd+alt+m"
+      }
+    ]
+  }
+}
