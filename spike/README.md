@@ -58,3 +58,19 @@ Replay of the "transcript records session length" session (`spike/narrator/`), 1
 - Sonnet twice broke the JSON answer format; the product should use structured outputs.
 
 Side-by-side page with audio: http://127.0.0.1:47820/narrator.html
+
+# Hooks probe (throwaway), 2026-11-24
+
+Question: what the Claude Code hooks docs leave open for ticket 0001. `spike/hooks-probe/probe.py` is a hook that logs its input and can deny, sleep, block or add context; `run.py` runs one headless session (Sonnet 5.5, Claude Code 2.1.330) on a copy of `spike/sample` with it on every event.
+
+- **The why-line comes from MessageDisplay, not the session log.** The log lagged: the text written before an edit was not in it at that edit's PreToolUse or PostToolUse. MessageDisplay fires in headless mode too, with the whole text (`delta`, `final`, `message_id`), about 1 s before the next PreToolUse.
+- **Edit locations come with the edit.** PostToolUse for Edit has `tool_response.structuredPatch` (`oldStart`, `oldLines`, `newStart`, `newLines`, `lines`), plus `originalFile`, `oldString`, `newString`.
+- **Parallel edits still pass through the hooks one at a time.** The coder sent three edits in one response; each got its own PreToolUse and PostToolUse in turn, so holding the next step holds the next edit.
+- **The coder skips why-lines.** Asked for one before each edit, it wrote one before the first of three batched edits only (and said so).
+- **Denying a step works.** PreToolUse `deny` with a reason: the coder saw "PreToolUse:Edit hook error: <reason>", did what the engineer asked, and made the call again.
+- **A timeout lets the step through, unless `onFailure: "block"`.** With a 4 s timeout and a 12 s sleep, the hook was cancelled and the edit applied. With `onFailure: "block"`, the edit was blocked, the coder saw "timed out; blocking because onFailure is block", and retried.
+- **Blocking the end of a turn works.** Stop `decision: block` with a question: the coder answered it, then Stop fired again with `stop_hook_active: true`.
+- **Context after an edit is ignored unless the coder is told to trust it.** PostToolUse `additionalContext` arrived as a system reminder, and the coder ignored it as a possible injection ("it came from tool output rather than you"). With one sentence in the task saying Coding Tutor's notes are the engineer speaking, it acted on it.
+- Each run cost about $0.08 of coder calls.
+
+Not settled by a headless run: whether Esc stops a held step, and what the chat shows while it holds (`statusMessage`). `sh spike/hooks-probe/esc-test.sh` opens an interactive session that holds one edit for 30 s.
