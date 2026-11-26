@@ -13,6 +13,7 @@ Ticket 0001 has the narrator reach its model through the Claude CLI with the eng
 - Add at least one other provider behind it, and choose the provider and model in the settings.
 - Check that each provider's structured outputs hold the answer format, since Sonnet broke the format twice without them.
 - Consider a local model, in line with decision 0005 (the code stays on the machine).
+- Give the narrator no tools on any provider, as in 0001, so it still sees only what the coder's tools returned and the coder's permission rules still decide what it can see.
 
 ## Done when
 

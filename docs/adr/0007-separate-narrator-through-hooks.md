@@ -18,6 +18,7 @@ This replaces "any agent through MCP tools" (0004): hooks are per agent, so each
 ## Consequences
 
 - The narrator never works out code locations itself: it is handed the file and lines of each edit, taken from the file after the edit lands.
+- The narrator has no tools and knows only what the coder's tools returned, so the coder's own permission rules decide what it can see. Files the engineer has denied are declared once, in their agent's settings, and never in Coding Tutor.
 - A hook that times out lets the coder's step through, so a hold must end before the hook's limit and hold the step again rather than release it.
 - The narrator answers questions about the work, "show me", and depth or tempo changes itself; it passes to the coder corrections, design objections, and any why that no why-line covers.
 - Depth and tempo belong to the narrator. The coder proposes the route; the narrator speaks it and paces each part.

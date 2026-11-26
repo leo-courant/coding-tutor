@@ -43,6 +43,11 @@ The engineer's own judgement of which narration was clearest is still to come.
 
 Also agreed: the narrator model is a setting, Sonnet by default and Haiku only as a budget option. The narrator is handed the file and lines of each edit, worked out from the file after the edit lands, and never works out locations itself.
 
+**Files the coder may not read stay hidden from the narrator too, with no rules of our own (2026-11-26).** The narrator has no tools at all, so it knows only what the coder's own tools returned. Whatever the coder's CLI denies (Claude Code `permissions.deny`, later OpenCode's permissions) never reaches the narrator, and the engineer declares it once, in the CLI. A question that needs a file the coder has not read goes to the coder, whose CLI rules then apply. To keep this true:
+
+- Start the narrator with `--tools ""` and `--strict-mcp-config`, so it has no file tools and none of the engineer's MCP servers.
+- Pass it only what PostToolUse reports for steps that ran, never what a denied step was about to do. Never read project files in the extension to add to an event.
+
 ## What the hooks probe settled (2026-11-24)
 
 Full notes in `spike/README.md` ("Hooks probe").
@@ -53,6 +58,7 @@ Full notes in `spike/README.md` ("Hooks probe").
 - **Interrupts for the coder:** a deny reason at its next step, or a Stop block at the end of its turn. Both worked.
 - **The coder must be told the notes are the engineer.** Without that, it ignored a PostToolUse note as a possible injection. `/tutor` must say that Coding Tutor's held steps and notes are the engineer speaking.
 - **Missing why-lines:** the coder wrote one before the first of three batched edits only. Ask for one per edit, and when an edit arrives without one, the narrator describes what changed without giving a reason (as in the experiment). Whether to hold the edit and ask the coder for one is a build decision.
+- **Denied files stay out of the hook events (2026-11-26, Claude Code 2.1.332).** With `Read(./secret.txt)` in the project's `permissions.deny`, the coder tried Read, Grep and `cat secret.txt`. Read was refused before any hook fired. Grep skipped the file. `cat` was refused even though `Bash(cat:*)` was allowed, and only its PreToolUse fired, showing the command but not the file. No event held the file's text. A narrator started with `--tools ""` and `--strict-mcp-config`, asked to read the same file, could not.
 - **Still open:** whether Esc stops a held step, and what the chat shows while it holds. Run `sh spike/hooks-probe/esc-test.sh` and note the answers here.
 
 ## Build notes
@@ -66,5 +72,6 @@ Full notes in `spike/README.md` ("Hooks probe").
 - The coder makes no calls that only narrate.
 - Replaying the "transcript records session length" session gives at least Sonnet's result (8 accurate, 0 wrong), and the engineer finds it clear.
 - Every pointer opens the right file at the right lines, including on "show me".
+- With a file in the coder's `permissions.deny`, asking the narrator about that file gets nothing from it, and nothing about it appears in the narrator's input.
 - Cost per session is measured and reported against today's.
 - The decision record replacing 0004 is written (done: 0007).
