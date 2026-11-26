@@ -7,9 +7,11 @@ Opened: 2026-11-26
 
 Coding Tutor runs local servers, starts processes on the host, records the microphone and keeps transcripts of code and speech. After 0001 it can also tell the coder what to do: the coder is told that Coding Tutor's held steps and notes are the engineer speaking. A flaw in any of these is a way into the engineer's machine or their agent, so the first public release waits for this review.
 
-## Open question
+## Standard (decided 2026-11-26)
 
-**Which standard to check against.** Proposal: OWASP ASVS level 1, keeping only the parts that apply to a local tool, plus VS Code's guidance for extensions and the Marketplace's own policies. Settle this before starting.
+- **OWASP ASVS 5.0, level 1.** Keep only the requirements that apply to a local tool, and record each one left out with the reason (for example, no user accounts or passwords).
+- **VS Code's own guidance:** its extension guidelines and Marketplace policies.
+- **OWASP's guidance on LLM prompt injection,** for the channel to the coder and the narrator's input. ASVS does not cover prompt injection.
 
 ## What to review
 
@@ -37,7 +39,7 @@ Found in the code on 2026-11-26. The list is a starting point, not a limit.
 
 ## Done when
 
-- The standard is chosen and written at the top of the report.
+- The report opens with the standard above and lists each ASVS requirement left out, with the reason.
 - The report is in `docs/security/`, with each finding either fixed (with a test where one fits) or accepted with the reason.
 - No finding rated high is left open.
 - The first publish in 0004 goes ahead only after this.

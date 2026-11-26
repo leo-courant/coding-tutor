@@ -14,7 +14,15 @@ After 0001 the coder reaches the extension through hooks rather than MCP tools, 
 
 ## Scope
 
-**Install outside this repo.** Decide how `/tutor` and the hooks get into the engineer's agent once the extension is installed. One option is a Claude Code plugin, which carries a skill and hooks together, installed or offered by the extension. Another is the extension writing them into the user's Claude Code settings. Either way, the engineer runs one install step, and it is undone when the extension is uninstalled.
+**Install outside this repo (decided 2026-11-26).** Each agent gets its own small adapter, packaged the way that agent installs add-ons. All of them speak the same agent-neutral protocol to the extension (0001).
+
+- **Claude Code: a Claude Code plugin.** It carries the `/tutor` skill and the hooks with their script. This repo doubles as the plugin marketplace (`.claude-plugin/marketplace.json`). It is installed at user level, so it works in every project.
+- **OpenCode (ticket 0003): an OpenCode plugin.** It is installed with `opencode plugin <module>`, plus a `/tutor` command file in the user's OpenCode config.
+- **The extension does the installing.** On first start it looks for `claude` and `opencode` and offers "Set up Coding Tutor for Claude Code" and "…for OpenCode". Each runs that agent's own install command, and there is a matching "Remove" command for each. The `vscode:uninstall` script removes them when the extension is uninstalled.
+- **Hooks cost nothing outside a session.** A plugin's hooks run on every tool call in every project, so the hook script must exit at once when no narrated session is active. It checks a session file before touching the network.
+- **No MCP server unless something still needs it.** If after 0001 the coder calls no MCP tool, the plugin carries no MCP server, and `.mcp.json` leaves the repo.
+
+Why plugins rather than writing into the engineer's settings: the agent installs, updates and removes a plugin with its own commands, and the engineer can see it and switch it off there. Edits to someone's settings file are easy to get wrong and hard to undo cleanly.
 
 **Package for the Marketplace.**
 - A top-level `icon` in `package.json`: a PNG of at least 128×128. The Marketplace refuses SVG icons, and `media/icon.svg` is only the activity-bar icon.

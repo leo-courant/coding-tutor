@@ -16,10 +16,12 @@ Beside a senior engineer, Leo watches the Explorer: the folders it opens on the 
 - The Narration panel stays visible at the same time. Today it lives in the activity bar, in the same side bar as the Explorer, so showing one hides the other.
 - Revealing a file never takes keyboard focus away from the editor or the chat.
 
-## Questions for Leo
+## Decided (2026-11-26, after Leo tried the demo)
 
-1. **Only the current path, or a trail too?** One option is to mark only where the pointer is now. The other is to also keep a quieter mark on every file and folder the session has touched, so that by the end the Explorer shows the change's footprint across the architecture.
-2. **Where the Narration panel goes.** The secondary side bar, the bottom panel, or the engineer's choice.
+Demo: `previews/git-and-explorer-demo.html`, at http://127.0.0.1:47820/git-and-explorer-demo.html.
+
+1. **Current path plus a trail.** The current path is marked in pink (`#e86fd0`): a tinted row and a pink edge on the file and each folder on its way, and a pink dot. Every file and folder the session touched earlier keeps a quieter, darker pink dot (`#9a6290`). By the end, the Explorer shows the change's footprint across the project. Leo: "I like the pink traces."
+2. **The Narration panel moves to the secondary side bar,** on the right, as in the demo, so the Explorer stays visible on the left.
 
 ## VS Code notes, to check while building
 
