@@ -23,9 +23,20 @@
     "muted": { "description": "Captions only, no voice. The coder is still paced at reading speed.", "type": "boolean", "default": false },
     "speed": { "description": "Speaking speed. 1.0 is normal.", "type": "number", "minimum": 0.5, "maximum": 2.0, "default": 1.0 },
     "narratorModel": {
-      "description": "The model the narrator runs on, passed to your agent's CLI as is (for Claude Code, its --model). Empty: your agent's default model, the one you code with.",
-      "type": "string",
-      "default": ""
+      "description": "The model the narrator runs on, passed to your agent as is: for Claude Code its --model (sonnet, opus, ...), for OpenCode its provider/model (as `opencode models` lists it). One model for every agent, or one per agent. Empty, or an agent left out: that agent's default model, the one you code with.",
+      "default": "",
+      "oneOf": [
+        { "type": "string", "description": "The same model for every agent." },
+        {
+          "type": "object",
+          "description": "A model per agent.",
+          "properties": {
+            "claude-code": { "type": "string", "description": "Claude Code's --model, for example sonnet." },
+            "opencode": { "type": "string", "description": "OpenCode's provider/model, for example local/qwen3.6-35b." }
+          },
+          "additionalProperties": { "type": "string" }
+        }
+      ]
     }
   }
 }

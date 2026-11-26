@@ -1,0 +1,38 @@
+[
+ {
+  "text": "",
+  "tools": [
+   [
+    "read",
+    {
+     "filePath": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/spike/opencode-probe/secret.txt"
+    }
+   ]
+  ]
+ },
+ {
+  "text": "",
+  "tools": [
+   [
+    "bash",
+    {
+     "command": "cat secret.txt",
+     "description": "show secret"
+    }
+   ]
+  ]
+ },
+ {
+  "text": "",
+  "tools": [
+   [
+    "grep",
+    {
+     "pattern": "hunter2",
+     "path": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/spike/opencode-probe",
+     "include": "*.txt"
+    }
+   ]
+  ]
+ }
+]

@@ -7,6 +7,8 @@
 //   read, search, command, edit, tool   a step that ran, with what it returned
 //   text   text the coder wrote (its why-line before an edit)
 //   end    the coder is ending its turn; answered when it may
+//   stopped  the engineer stopped the coder in their agent (Esc) while no step
+//          was held; a held step's adapter drops its connection instead
 //
 // Each step's result goes to the narrator, which decides what to say; the voice
 // says it while the coder's next step is held. What the engineer says goes to the
@@ -77,6 +79,10 @@ function forCoderReason(messages) {
   return `Held by Coding Tutor. The engineer, through the narrator: ${messages.join(' Also: ')} Deal with this first, then carry on (make this call again if it still applies).`;
 }
 const STILL_PAUSED = 'Held by Coding Tutor: the engineer has paused the session to think. Make the same call again; it will go through when they resume.';
+// A hold that ran out while the engineer was paused. `paused` lets an adapter
+// whose agent has no limit on a hook hold again itself, without the coder ever
+// seeing the reason; one whose agent ends long hooks passes the reason on.
+const pausedAnswer = (decision) => ({ decision, reason: STILL_PAUSED, paused: true });
 
 function createSession({ control, speaker, startNarrator, point, caption, config, log = () => {}, onChange = () => {}, holdLimitMs = 9 * 60 * 1000 }) {
   let s = null;
@@ -111,6 +117,7 @@ function createSession({ control, speaker, startNarrator, point, caption, config
       texts: new Map(), // text being streamed, by message id
       forCoder: [],
       awaitingCoder: false,
+      ending: false, // the coder's end of turn is waiting for the recap
       working: false,
       thinking: false,
       answering: false, // thinking about what the engineer said
@@ -259,6 +266,7 @@ function createSession({ control, speaker, startNarrator, point, caption, config
     const reason = forCoderReason(s.forCoder);
     s.forCoder = [];
     s.awaitingCoder = true;
+    s.ending = false;
     return reason;
   }
 
@@ -301,16 +309,20 @@ function createSession({ control, speaker, startNarrator, point, caption, config
         const r = await hold(signal);
         if (r === 'aborted') { stoppedByEngineer(); return allow; }
         if (r === 'forCoder') return { decision: 'deny', reason: takeForCoder() };
-        if (r === 'paused') return { decision: 'deny', reason: STILL_PAUSED };
+        if (r === 'paused') return pausedAnswer('deny');
         return allow;
       }
       case 'end': {
-        s.items.push({ kind: 'end', lastMessage: ev.lastMessage || '' });
-        work();
+        // The same end again after a pause asks for no second recap.
+        if (!s.ending) {
+          s.ending = true;
+          s.items.push({ kind: 'end', lastMessage: ev.lastMessage || '' });
+          work();
+        }
         const r = await hold(signal);
         if (r === 'aborted') { stoppedByEngineer(); return allow; }
         if (r === 'forCoder') return { decision: 'block', reason: takeForCoder() };
-        if (r === 'paused') return { decision: 'block', reason: STILL_PAUSED };
+        if (r === 'paused') return pausedAnswer('block');
         if (r === 'go') finish(null);
         return allow;
       }
@@ -324,6 +336,9 @@ function createSession({ control, speaker, startNarrator, point, caption, config
         if (s.awaitingCoder) work();
         return allow;
       }
+      case 'stopped':
+        stoppedByEngineer();
+        return allow;
       case 'read': case 'search': case 'command': case 'edit': case 'tool':
         record(ev);
         work();

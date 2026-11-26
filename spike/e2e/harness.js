@@ -8,6 +8,10 @@
 //
 // With INTERACTIVE=1 it starts no coder: run one yourself (for example in tmux)
 // in <project>. The voice then takes the full reading time.
+//
+// With CODER=opencode, <claude-cli> is the opencode CLI, the coder runs
+// `opencode run --command tutor <task>` (its model is the project's), and the
+// narrator runs through OpenCode on <narrator-model> (provider/model).
 const http = require('http');
 const fs = require('fs');
 const os = require('os');
@@ -16,6 +20,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { Control } = require('../../extension/lib/speaker');
 const { createNarrator, launchFor } = require('../../extension/lib/narrator');
+const { createOpencodeNarrator } = require('../../extension/lib/opencode-narrator');
 const { createSession } = require('../../extension/lib/session');
 const { readingTimeMs } = require('../../extension/lib/sentences');
 
@@ -45,10 +50,14 @@ const session = createSession({
   startNarrator: ({ agent, cli: coderCli }) => {
     note(`narrator starts for ${agent} with ${coderCli}`);
     const sp = fs.readFileSync(path.join(__dirname, '..', '..', 'extension', 'session-script.md'), 'utf8').replace(/\{\{defaultDepth\}\}/g, 'outline');
-    const { command, args } = launchFor(agent, { cli: coderCli, model: narratorModel, systemPrompt: sp });
     const dir = path.join(os.homedir(), '.coding-tutor', 'narrator');
     fs.mkdirSync(dir, { recursive: true });
-    narrator = createNarrator({ command, args, cwd: dir, log: note });
+    if (agent === 'opencode') {
+      narrator = createOpencodeNarrator({ cli: coderCli, model: narratorModel, systemPrompt: sp, cwd: dir, log: note });
+    } else {
+      const { command, args } = launchFor(agent, { cli: coderCli, model: narratorModel, systemPrompt: sp });
+      narrator = createNarrator({ command, args, cwd: dir, log: note });
+    }
     return {
       async ask(prompt) {
         const t = Date.now();
@@ -137,9 +146,11 @@ server.listen(0, '127.0.0.1', async () => {
     process.exit(0);
   }
   const prompt = `/tutor ${task}`;
-  const coder = spawn(cli, ['-p', prompt, '--model', coderModel, '--permission-mode', 'acceptEdits',
-    '--allowedTools', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(python3:*)', 'mcp__coding-tutor__begin_session',
-    '--output-format', 'stream-json', '--verbose'], { cwd: project, stdio: ['ignore', 'pipe', 'pipe'] });
+  const coder = process.env.CODER === 'opencode'
+    ? spawn(cli, ['run', ...(coderModel !== '-' ? ['-m', coderModel] : []), '--command', 'tutor', task], { cwd: project, env: { ...process.env, PWD: project }, stdio: ['ignore', 'pipe', 'pipe'] })
+    : spawn(cli, ['-p', prompt, '--model', coderModel, '--permission-mode', 'acceptEdits',
+      '--allowedTools', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(python3:*)', 'mcp__coding-tutor__begin_session',
+      '--output-format', 'stream-json', '--verbose'], { cwd: project, stdio: ['ignore', 'pipe', 'pipe'] });
   let coderOut = '';
   coder.stdout.on('data', (d) => (coderOut += d));
   coder.stderr.on('data', (d) => note(`coder stderr: ${String(d).trim()}`));

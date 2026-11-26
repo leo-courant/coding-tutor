@@ -2,8 +2,9 @@
 // Owns the voice, the captions, the pointer, the engineer's controls and the
 // narrator. The coder's agent reaches it through a token-protected server on
 // 127.0.0.1: its `begin_session` tool (mcp/server.py) starts a session, and its
-// hooks (mcp/claude_code.py for Claude Code) report each step and wait to be let
-// through. lib/session.js coordinates the two.
+// hooks (mcp/claude_code.py for Claude Code, the mcp/opencode.js plugin for
+// OpenCode) report each step and wait to be let through. lib/session.js
+// coordinates the two.
 const vscode = require('vscode');
 const http = require('http');
 const fs = require('fs');
@@ -17,6 +18,7 @@ const transcript = require('./lib/transcript');
 const mic = require('./lib/mic');
 const { Control, createSpeaker } = require('./lib/speaker');
 const { createNarrator, launchFor } = require('./lib/narrator');
+const { createOpencodeNarrator } = require('./lib/opencode-narrator');
 const { createSession } = require('./lib/session');
 const { panelHtml, voicesHtml } = require('./lib/views');
 
@@ -132,10 +134,15 @@ let narratorModel = '';
 function startNarrator({ agent, cli }) {
   const cfg = config.load();
   const kind = agent || 'claude-code';
-  narratorModel = cfg.narratorModel;
-  const { command, args } = launchFor(kind, { cli: cli || fallbackCli(kind), model: cfg.narratorModel, systemPrompt: sessionScript(cfg.defaultDepth) });
+  narratorModel = config.narratorModelFor(cfg, kind);
+  const systemPrompt = sessionScript(cfg.defaultDepth);
+  const log = (line) => out.appendLine(line);
   fs.mkdirSync(NARRATOR_DIR, { recursive: true, mode: 0o700 });
-  return createNarrator({ command, args, cwd: NARRATOR_DIR, log: (line) => out.appendLine(line) });
+  if (kind === 'opencode') {
+    return createOpencodeNarrator({ cli, model: narratorModel, systemPrompt, cwd: NARRATOR_DIR, log });
+  }
+  const { command, args } = launchFor(kind, { cli: cli || fallbackCli(kind), model: narratorModel, systemPrompt });
+  return createNarrator({ command, args, cwd: NARRATOR_DIR, log });
 }
 
 // The speaker, with the panel told while it speaks.

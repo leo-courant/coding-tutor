@@ -147,7 +147,7 @@ test('a pause holds the next step; a pause longer than the hold limit asks the c
   const t = setup({ holdLimitMs: 40 });
   t.session.begin('t');
   t.control.pause();
-  assert.deepStrictEqual(await t.ev({ kind: 'step' }), { decision: 'deny', reason: STILL_PAUSED });
+  assert.deepStrictEqual(await t.ev({ kind: 'step' }), { decision: 'deny', reason: STILL_PAUSED, paused: true });
   const again = t.ev({ kind: 'step' });
   await tick(10);
   t.control.resume();
@@ -173,6 +173,39 @@ test('something for the coder during the recap blocks the end of its turn', asyn
   assert.strictEqual(r.decision, 'block');
   assert.match(r.reason, /Also add a test\./);
   assert.strictEqual(t.session.active, true);
+});
+
+test('a pause at the end of the turn: the same end sent again gets no second recap', async () => {
+  const t = setup({ answer: (p) => (/ended its turn/.test(p) ? say('Recap.') : say(null)), holdLimitMs: 40 });
+  t.session.begin('t');
+  t.control.pause();
+  assert.deepStrictEqual(await t.ev({ kind: 'end', lastMessage: 'Done.' }), { decision: 'block', reason: STILL_PAUSED, paused: true });
+  const again = t.ev({ kind: 'end', lastMessage: 'Done.' });
+  await tick(10);
+  t.control.resume();
+  assert.deepStrictEqual(await again, { decision: 'allow' });
+  assert.strictEqual(t.prompts.filter((p) => /ended its turn/.test(p)).length, 1);
+  assert.strictEqual(t.session.active, false);
+});
+
+test('an end after the coder dealt with something said during the recap gets a new recap', async () => {
+  let recaps = 0;
+  const t = setup({ answer: (p) => (/engineer interrupted/.test(p) ? say(null, { toCoder: 'Also add a test.' }) : /ended its turn/.test(p) ? (recaps += 1, say(`Recap ${recaps}.`)) : say(null)) });
+  t.session.begin('t');
+  t.session.engineer('add a test too');
+  assert.strictEqual((await t.ev({ kind: 'end', lastMessage: 'Done.' })).decision, 'block');
+  await t.ev({ kind: 'text', text: 'Why: the engineer asked for a test.' });
+  assert.deepStrictEqual(await t.ev({ kind: 'end', lastMessage: 'Added the test.' }), { decision: 'allow' });
+  assert.strictEqual(t.finished[0].recap, 'Recap 2.');
+});
+
+test('the engineer stopping the coder while no step is held ends the session', async () => {
+  const t = setup({ answer: () => say('x') });
+  t.session.begin('t');
+  await t.ev({ kind: 'read', file: '/p/a.py', text: 'one' });
+  assert.deepStrictEqual(await t.ev({ kind: 'stopped' }), { decision: 'allow' });
+  assert.strictEqual(t.session.active, false);
+  assert.strictEqual(t.finished[0].endedBy, 'stopped by the engineer');
 });
 
 test('Esc in the agent while a step is held ends the session', async () => {
