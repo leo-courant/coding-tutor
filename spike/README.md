@@ -74,3 +74,11 @@ Question: what the Claude Code hooks docs leave open for ticket 0001. `spike/hoo
 - Each run cost about $0.08 of coder calls.
 
 Not settled by a headless run: whether Esc stops a held step, and what the chat shows while it holds (`statusMessage`). `sh spike/hooks-probe/esc-test.sh` opens an interactive session that holds one edit for 30 s.
+
+# Ticket 0001 checks (throwaway), 2026-11-26
+
+- `spike/narrator/replay_prep.py` rebuilds the recorded session's edits as the Claude Code adapter would have sent them (files rebuilt from the coder's `cat -n` and the first commit). `replay.js` runs them through `lib/session.js` and the real narrator. `page_product.py` builds http://127.0.0.1:47820/narrator-product.html.
+- `spike/e2e/harness.js` stands in for the extension's window, with the real coordinator and narrator, a silent voice, and an engineer script, while a real headless coder runs `/tutor`. `spike/e2e/esc-test.sh` runs on the host and drives an interactive coder through tmux to press Esc during a held step.
+- Skill frontmatter hooks fire for the `/tutor` turn (PreToolUse, PostToolUse, MessageDisplay, Stop) and not in a resumed session. In their environment, `CLAUDE_PLUGIN_ROOT` is the skill's folder and `CLAUDE_CODE_EXECPATH` is the coder's CLI (not set by the host's native install).
+- `claude -p --input-format stream-json --json-schema` answers every user message with `structured_output`, and keeps context, cached, across messages. `total_cost_usd` is the running total for the process.
+

@@ -1,7 +1,9 @@
 // Coding Tutor: the engineer's side of a narrated session.
-// Owns the voice, the captions, the pointer and the engineer's controls. The
-// agent reaches it through a token-protected server on 127.0.0.1 (see
-// mcp/server.py for the other end).
+// Owns the voice, the captions, the pointer, the engineer's controls and the
+// narrator. The coder's agent reaches it through a token-protected server on
+// 127.0.0.1: its `begin_session` tool (mcp/server.py) starts a session, and its
+// hooks (mcp/claude_code.py for Claude Code) report each step and wait to be let
+// through. lib/session.js coordinates the two.
 const vscode = require('vscode');
 const http = require('http');
 const fs = require('fs');
@@ -13,29 +15,31 @@ const config = require('./lib/config');
 const voice = require('./lib/voice');
 const transcript = require('./lib/transcript');
 const mic = require('./lib/mic');
-const { Control, createNarrator } = require('./lib/narrator');
+const { Control, createSpeaker } = require('./lib/speaker');
+const { createNarrator, launchFor } = require('./lib/narrator');
+const { createSession } = require('./lib/session');
 const { panelHtml, voicesHtml } = require('./lib/views');
 
-const WINDOWS_DIR = path.join(os.homedir(), '.coding-tutor', 'windows');
+const STATE_DIR = path.join(os.homedir(), '.coding-tutor');
+const WINDOWS_DIR = path.join(STATE_DIR, 'windows');
+// The narrator runs in a folder of its own, so its CLI picks up nothing from
+// the project: it knows only what the coder's tools returned.
+const NARRATOR_DIR = path.join(STATE_DIR, 'narrator');
+const USER_SCRIPT = path.join(os.homedir(), '.config', 'coding-tutor', 'session-script.md');
+const DEFAULT_SCRIPT = path.join(__dirname, 'session-script.md');
 const SAMPLE_SENTENCE = 'Here is the loop. It tries the call, and if it fails, it remembers the error and waits a little longer each time.';
-// Claude Code moves a tool call to the background after about two minutes, so a
-// pause never holds a call longer than this; the agent calls `wait` instead.
-const HOLD_LIMIT_MS = 90 * 1000;
-
-const NOTES = {
-  interrupted: 'The engineer interrupted. Whatever you were saying was cut off or not said. Respond to what they said before doing anything else.',
-  paused: 'The engineer paused the session to think. Call wait, and keep calling it until it returns something other than paused. Do nothing else meanwhile.',
-  skipped: 'The engineer skipped the rest of this narration. Carry on, a little more briefly.',
-};
+const SAMPLE_HOLD_MS = 90 * 1000;
 
 let out;
 let pointerType;
 let pointerEditor = null;
 let panelView = null;
-let queue = Promise.resolve(); // agent requests are handled one at a time, in order
+let queue = Promise.resolve(); // begin_session requests are handled one at a time, in order
+let writeWindowFile = () => {};
 const control = new Control();
-const narrator = createNarrator({ control, synth: voice.synth, play: voice.play, isMuted: () => config.load().muted });
-const session = { active: false, task: '', captions: [], transcriptFile: null, startedAt: null, busy: false, ending: null };
+const speaker = createSpeaker({ control, synth: voice.synth, play: voice.play, isMuted: () => config.load().muted });
+// What the panel and the transcript show of the current (or last) session.
+const ui = { task: '', captions: [], transcriptFile: null, startedAt: null, speaking: false };
 // The mic: 'off' -> 'starting' (the headset is switching on) -> 'listening' -> 'transcribing' -> 'off'.
 const micState = { state: 'off', recording: null, error: null, heard: null, partial: '', previewTimer: null };
 const PREVIEW_EVERY_MS = 1000;
@@ -49,13 +53,13 @@ function pushState() {
   if (!panelView) return;
   panelView.webview.postMessage({
     type: 'state',
-    active: session.active,
-    task: session.task,
-    captions: session.captions,
+    active: tutor.active,
+    task: ui.task,
+    captions: ui.captions,
     muted: config.load().muted,
     paused: control.paused,
-    speaking: session.busy,
-    waitingForAgent: Boolean(control.message),
+    speaking: ui.speaking,
+    waitingForAgent: tutor.answering,
     mic: micState.state,
     micError: micState.error,
     partial: micState.partial,
@@ -69,8 +73,9 @@ function pushState() {
 control.onChange(pushState);
 
 function addCaption(caption) {
-  session.captions.push(caption);
-  if (session.transcriptFile) transcript.append(session.transcriptFile, caption, workspaceFolder());
+  ui.captions.push(caption);
+  // The recap goes into the transcript under its own heading when the session ends.
+  if (ui.transcriptFile && !caption.recap) transcript.append(ui.transcriptFile, caption, workspaceFolder());
   pushState();
 }
 
@@ -106,43 +111,81 @@ async function point(file, startLine, endLine) {
   return null;
 }
 
-// ---- what the agent is told ------------------------------------------------
+// ---- the narrator and the session ------------------------------------------
 
-function forAgent(result, extra = {}) {
-  const reply = { ok: true, outcome: result.outcome, ...extra };
-  if (result.outcome === 'interrupted') reply.engineerSaid = control.takeMessage();
-  if (NOTES[result.outcome]) reply.note = NOTES[result.outcome];
-  if (result.muted) reply.muted = true;
-  if (result.voiceError) {
-    reply.voiceError = result.voiceError;
-    out.appendLine(`voice failed: ${result.voiceError}`);
-  }
-  return reply;
+function sessionScript(defaultDepth) {
+  const file = fs.existsSync(USER_SCRIPT) ? USER_SCRIPT : DEFAULT_SCRIPT;
+  return fs.readFileSync(file, 'utf8').replace(/\{\{defaultDepth\}\}/g, defaultDepth);
 }
 
-async function speak(run) {
-  session.busy = true;
-  pushState();
-  try {
-    return await run();
-  } finally {
-    session.busy = false;
+// The coder's CLI, when its adapter did not report one: the agent on the PATH,
+// or the one the Claude Code extension ships (inside a Flatpak there is often
+// no other).
+function fallbackCli(agent) {
+  if (agent !== 'claude-code') return null;
+  const ext = vscode.extensions.getExtension('anthropic.claude-code');
+  const bundled = ext && path.join(ext.extensionPath, 'resources', 'native-binary', 'claude');
+  return bundled && fs.existsSync(bundled) ? bundled : 'claude';
+}
+
+let narratorModel = '';
+function startNarrator({ agent, cli }) {
+  const cfg = config.load();
+  const kind = agent || 'claude-code';
+  narratorModel = cfg.narratorModel;
+  const { command, args } = launchFor(kind, { cli: cli || fallbackCli(kind), model: cfg.narratorModel, systemPrompt: sessionScript(cfg.defaultDepth) });
+  fs.mkdirSync(NARRATOR_DIR, { recursive: true, mode: 0o700 });
+  return createNarrator({ command, args, cwd: NARRATOR_DIR, log: (line) => out.appendLine(line) });
+}
+
+// The speaker, with the panel told while it speaks.
+const shownSpeaker = {
+  async speak(text, cfg, holdMs) {
+    ui.speaking = true;
     pushState();
-  }
-}
+    try {
+      return await speaker.speak(text, cfg, holdMs);
+    } finally {
+      ui.speaking = false;
+      pushState();
+    }
+  },
+};
+
+const tutor = createSession({
+  control,
+  speaker: shownSpeaker,
+  startNarrator,
+  point,
+  caption: addCaption,
+  config: config.load,
+  log: (line) => out.appendLine(line),
+  onChange: () => pushState(),
+});
+
+tutor.onFinish((summary) => {
+  const cost = `$${summary.costUsd.toFixed(3)}`;
+  const model = narratorModel || "the agent's default model";
+  const note = summary.turns ? `Narrator: ${model}, ${summary.turns} turns, ${cost}.` : null;
+  out.appendLine(`session ended (${summary.endedBy || 'the coder finished'}); ${note || 'the narrator was not used'}`);
+  if (ui.transcriptFile) transcript.finish(ui.transcriptFile, summary.recap, ui.startedAt, new Date(), note);
+  if (micState.recording) stopMic();
+  clearPointer();
+  writeWindowFile(false);
+  pushState();
+});
 
 // ---- agent requests ----------------------------------------------------------
 
 async function beginSession(m) {
   const task = (m.task || 'Narrated session').trim();
-  control.reset();
-  session.active = true;
-  session.task = task;
-  session.captions = [];
-  session.ending = null;
-  session.startedAt = new Date();
-  session.transcriptFile = transcript.start(task, workspaceFolder());
+  tutor.begin(task, typeof m.request === 'string' ? m.request.trim() : '');
+  ui.task = task;
+  ui.captions = [];
+  ui.startedAt = new Date();
+  ui.transcriptFile = transcript.start(task, workspaceFolder());
   clearPointer();
+  writeWindowFile(true);
   await vscode.commands.executeCommand('codingTutor.panel.focus', { preserveFocus: true }).then(undefined, () => {});
   pushState();
   const cfg = config.load();
@@ -163,56 +206,16 @@ async function beginSession(m) {
       vscode.window.showWarningMessage(`Coding Tutor: the voice is unavailable, captions only. ${e.message}`);
     }
   }
-  return { ok: true, defaultDepth: cfg.defaultDepth, voice: voiceState, transcript: session.transcriptFile };
+  return { ok: true, voice: voiceState, transcript: ui.transcriptFile };
 }
 
-async function narrate(m) {
-  if (!m.text || typeof m.text !== 'string' || !m.text.trim()) return { ok: false, error: 'text is required' };
-  // The engineer spoke while the agent was busy: they come first, and this
-  // narration is not said.
-  if (control.message) return forAgent({ outcome: 'interrupted' }, { spoken: false });
-  const note = await point(m.file, m.startLine, m.endLine);
-  addCaption({ text: m.text, file: m.file || null, startLine: m.startLine || null, endLine: m.endLine || m.startLine || null });
-  const result = await speak(() => narrator.narrate(m.text, config.load(), HOLD_LIMIT_MS));
-  return forAgent(result, note ? { pointerNote: note } : {});
-}
-
-async function wait() {
-  if (control.message) return forAgent({ outcome: 'interrupted' });
-  const result = await speak(() => narrator.resumeHeld(HOLD_LIMIT_MS));
-  if (session.ending && result.outcome !== 'paused' && result.outcome !== 'interrupted') return finishSession();
-  return forAgent(result);
-}
-
-function finishSession() {
-  if (session.transcriptFile && session.active) transcript.finish(session.transcriptFile, session.ending, session.startedAt);
-  if (micState.recording) stopMic();
-  session.ending = null;
-  session.active = false;
-  clearPointer();
-  pushState();
-  return { ok: true, outcome: 'ended', transcript: session.transcriptFile };
-}
-
-async function endSession(m) {
-  if (control.message) return forAgent({ outcome: 'interrupted' }, { ended: false });
-  const recap = (m.recap || '').trim();
-  if (!recap) return finishSession();
-  clearPointer();
-  session.ending = recap;
-  session.captions.push({ text: recap, file: null, startLine: null, endLine: null, recap: true });
-  const result = await speak(() => narrator.narrate(recap, config.load(), HOLD_LIMIT_MS));
-  if (result.outcome === 'paused' || result.outcome === 'interrupted') return forAgent(result, { ended: false });
-  return { ...forAgent(result), ...finishSession() };
-}
-
-const ROUTES = { '/session/begin': beginSession, '/narrate': narrate, '/wait': wait, '/session/end': endSession };
+const ROUTES = { '/session/begin': beginSession };
 
 // ---- the engineer's controls -------------------------------------------------
 
 function toggleMute() {
   config.update({ muted: !config.load().muted });
-  control.stop(); // the narrator says the cut-off sentence again in the new mode
+  control.stop(); // the speaker says the cut-off sentence again in the new mode
   pushState();
 }
 
@@ -230,7 +233,7 @@ function setMic(state, error = null) {
 async function toggleMic() {
   if (micState.state === 'transcribing') return;
   if (micState.recording) return stopMic();
-  if (!session.active) {
+  if (!tutor.active) {
     vscode.window.showInformationMessage('Coding Tutor: the microphone works during a narrated session.');
     return;
   }
@@ -296,10 +299,9 @@ async function stopMic() {
 }
 
 function interrupt(text) {
-  const said = (text || '').trim();
-  if (!said) return;
-  addCaption({ text: said, engineer: true });
-  control.interrupt(said);
+  if (!tutor.engineer(text) && (text || '').trim()) {
+    vscode.window.showInformationMessage('Coding Tutor: there is no narrated session to send that to.');
+  }
 }
 
 async function openSettings() {
@@ -308,8 +310,8 @@ async function openSettings() {
 }
 
 async function openTranscript() {
-  if (!session.transcriptFile) return vscode.window.showInformationMessage('Coding Tutor: no narrated session has run in this window yet.');
-  const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(session.transcriptFile));
+  if (!ui.transcriptFile) return vscode.window.showInformationMessage('Coding Tutor: no narrated session has run in this window yet.');
+  const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(ui.transcriptFile));
   await vscode.window.showTextDocument(doc);
 }
 
@@ -319,7 +321,7 @@ function sampleVoices() {
   const voices = schema.properties.voice.enum;
   // The sampler has its own controls so it never touches a running session.
   const sampleControl = new Control();
-  const sampler = createNarrator({ control: sampleControl, synth: voice.synth, play: voice.play, isMuted: () => false });
+  const sampler = createSpeaker({ control: sampleControl, synth: voice.synth, play: voice.play, isMuted: () => false });
   let playing = null;
   panel.webview.html = voicesHtml(panel.webview.cspSource);
   const send = (extra) => panel.webview.postMessage({ type: 'voices', voices, current: config.load().voice, sentence: SAMPLE_SENTENCE, playing, ...extra });
@@ -332,7 +334,7 @@ function sampleVoices() {
       const mine = msg.voice;
       playing = mine;
       send({});
-      const r = await sampler.narrate(SAMPLE_SENTENCE, { ...config.load(), voice: mine }, HOLD_LIMIT_MS);
+      const r = await sampler.speak(SAMPLE_SENTENCE, { ...config.load(), voice: mine }, SAMPLE_HOLD_MS);
       if (r.voiceError) vscode.window.showWarningMessage(`Coding Tutor: could not play the sample. ${r.voiceError}`);
       if (playing === mine) { playing = null; send({}); }
     }
@@ -361,7 +363,7 @@ function activate(ctx) {
     vscode.commands.registerCommand('codingTutor.skip', () => control.skip()),
     vscode.commands.registerCommand('codingTutor.interrupt', async () => {
       control.pause();
-      const said = await vscode.window.showInputBox({ prompt: 'Coding Tutor: say something to the agent', placeHolder: 'Ask, correct, or change the depth…', ignoreFocusOut: true });
+      const said = await vscode.window.showInputBox({ prompt: 'Coding Tutor: say something to the narrator', placeHolder: 'Ask, correct, or change the depth…', ignoreFocusOut: true });
       if (said && said.trim()) interrupt(said);
     }),
     vscode.commands.registerCommand('codingTutor.sampleVoices', sampleVoices),
@@ -384,7 +386,7 @@ function activate(ctx) {
           if (msg.type === 'settings') openSettings();
           if (msg.type === 'transcript') openTranscript();
           if (msg.type === 'point') {
-            const c = session.captions[msg.index];
+            const c = ui.captions[msg.index];
             if (c && c.file) point(c.file, c.startLine, c.endLine);
           }
         });
@@ -396,27 +398,49 @@ function activate(ctx) {
   // The agent's door in: localhost only, and every request must carry the token.
   const token = crypto.randomBytes(24).toString('hex');
   const server = http.createServer((req, res) => {
-    const reply = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
+    let replied = false;
+    const reply = (code, obj) => { replied = true; res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
     if (req.headers['x-coding-tutor-token'] !== token) return reply(403, { ok: false, error: 'bad token' });
+    const isEvent = req.url === '/coder/event';
     const handler = ROUTES[req.url];
-    if (req.method !== 'POST' || !handler) return reply(404, { ok: false, error: 'unknown route' });
+    if (req.method !== 'POST' || (!handler && !isEvent)) return reply(404, { ok: false, error: 'unknown route' });
     let body = '';
     req.on('data', (c) => (body += c));
-    req.on('end', () => {
+    req.on('end', async () => {
+      const fail = (e) => { out.appendLine(String(e.stack || e)); if (!replied) reply(200, { ok: false, error: String(e.message || e) }); };
+      if (isEvent) {
+        // The coder's hooks. These are not queued: a held step waits while the
+        // next events arrive. When the agent kills a held hook (the engineer
+        // pressed Esc), the connection drops before the answer.
+        const stopped = new AbortController();
+        res.on('close', () => { if (!replied) stopped.abort(); });
+        try {
+          const answer = await tutor.event(JSON.parse(body || '{}'), { signal: stopped.signal });
+          if (!res.destroyed) reply(200, { ok: true, ...answer });
+        } catch (e) { fail(e); }
+        return;
+      }
       queue = queue.then(async () => {
-        try { reply(200, await handler(JSON.parse(body || '{}'))); } catch (e) { out.appendLine(String(e.stack || e)); reply(200, { ok: false, error: String(e.message || e) }); }
+        try { reply(200, await handler(JSON.parse(body || '{}'))); } catch (e) { fail(e); }
       });
     });
   });
   const windowFile = path.join(WINDOWS_DIR, `${process.pid}-${crypto.randomBytes(4).toString('hex')}.json`);
-  server.listen(0, '127.0.0.1', () => {
+  // `narrating` lets the hooks do nothing, quickly, when no session is running.
+  writeWindowFile = (narrating) => {
+    if (!server.listening) return;
     fs.mkdirSync(WINDOWS_DIR, { recursive: true, mode: 0o700 });
     const folders = (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath);
-    fs.writeFileSync(windowFile, JSON.stringify({ port: server.address().port, token, folders, pid: process.pid }), { mode: 0o600 });
+    fs.writeFileSync(windowFile, JSON.stringify({ port: server.address().port, token, folders, pid: process.pid, narrating }), { mode: 0o600 });
+  };
+  server.listen(0, '127.0.0.1', () => {
+    writeWindowFile(false);
+    const folders = (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath);
     out.appendLine(`listening on 127.0.0.1:${server.address().port} for ${folders.join(', ') || '(no folder)'}`);
   });
   ctx.subscriptions.push({
     dispose() {
+      if (tutor.active) tutor.end('the window closed');
       control.skip();
       server.close();
       try { fs.unlinkSync(windowFile); } catch { /* already gone */ }

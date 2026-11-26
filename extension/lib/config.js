@@ -4,7 +4,9 @@ const os = require('os');
 const path = require('path');
 
 const DEPTHS = ['skim', 'outline', 'walk', 'line-by-line'];
-const DEFAULTS = { voice: 'am_adam', defaultDepth: 'outline', language: 'en', muted: false, speed: 1.0 };
+// narratorModel: empty means the agent's default model, the one the engineer
+// codes with. Anything else goes to the agent's CLI as is.
+const DEFAULTS = { voice: 'am_adam', defaultDepth: 'outline', language: 'en', muted: false, speed: 1.0, narratorModel: '' };
 
 function configPath() {
   // Deliberately not XDG_CONFIG_HOME: inside a Flatpak that points into the sandbox,
@@ -17,6 +19,7 @@ function load() {
   try { raw = JSON.parse(fs.readFileSync(configPath(), 'utf8')); } catch { /* missing or invalid: defaults */ }
   const cfg = { ...DEFAULTS, ...raw };
   if (!DEPTHS.includes(cfg.defaultDepth)) cfg.defaultDepth = DEFAULTS.defaultDepth;
+  cfg.narratorModel = typeof cfg.narratorModel === 'string' ? cfg.narratorModel.trim() : '';
   return cfg;
 }
 

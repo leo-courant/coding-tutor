@@ -1,6 +1,6 @@
 # 0001: Separate the narrator from the coder
 
-Status: designed (2026-11-24), all open questions settled (2026-11-26), ready to build. Decision record: docs/adr/0007-separate-narrator-through-hooks.md
+Status: built (2026-11-26), waiting for Leo's judgement of clarity. Decision record: docs/adr/0007-separate-narrator-through-hooks.md
 Opened: 2026-11-24
 
 ## Why
@@ -78,3 +78,25 @@ Full notes in `spike/README.md` ("Hooks probe").
 - With a file in the coder's `permissions.deny`, asking the narrator about that file gets nothing from it, and nothing about it appears in the narrator's input.
 - Cost per session is measured and reported against today's.
 - The decision record replacing 0004 is written (done: 0007).
+
+## Built (2026-11-26)
+
+- **Agent side.** `/tutor` switches the hooks on in its frontmatter, so they run for that turn only (tested: they do not carry into a resumed session). The hook command finds `mcp/claude_code.py` through `$CLAUDE_PLUGIN_ROOT/hook.py`, a link in the skill folder; Claude Code sets `CLAUDE_PLUGIN_ROOT` to the skill's folder for skill hooks. The adapter passes the coder's own CLI (`CLAUDE_CODE_EXECPATH`), which the narrator then runs on. `begin_session` is the only MCP tool left. When no session is running, the hooks do nothing: the window file says whether one is.
+- **Extension side.** `lib/session.js` (agent-neutral coordinator), `lib/narrator.js` (the narrator process), `lib/regions.js` (where each edit is now). The old `lib/narrator.js` is now `lib/speaker.js`. The session script is the narrator's now, at `extension/session-script.md`. The narrator answers in parts, each with its own pointer, so "show me" can walk through several places.
+- **A session is the `/tutor` turn.** It ends at the coder's Stop with the narrator's recap. If the engineer passed something to the coder during the recap, the end of the turn is blocked and the coder carries on.
+
+Results against "Done when":
+
+- **No narration calls.** The coder has no narration tool. In the live run, its 9 calls were all work.
+- **Replay** (`spike/narrator/replay.js`, Sonnet): 10 accurate, 1 partly ("show me" named three places and highlighted two), 0 wrong, $0.071. Page with audio: http://127.0.0.1:47820/narrator-product.html. Clarity is Leo's judgement, still to give.
+- **Default model.** With the setting empty, no `--model` is passed (unit test). Nothing names a Claude model; Leo's settings set `narratorModel` to `sonnet`.
+- **Pointers.** Every pointer in the replay and the live runs showed the edited lines, including after a later edit moved them ("show me the first change again" pointed at line 17, where the line edited at 12 had moved).
+- **Denied files.** With `Read(./secret.txt)` denied and a task asking for it, the file's text appeared nowhere in the narrator's input, and the narrator told the engineer it had not been shown it.
+- **Cost.** The narrator's cost is written at the end of each transcript. Replay: $0.071 against about $0.65 when the coder narrated itself. In the live run: $0.043 for the narrator, beside $0.137 for a Sonnet coder.
+- **Esc** (interactive, through tmux): the held edit was rejected and the session ended as stopped by the engineer.
+
+Not settled:
+
+- Holding every step until the narrator has answered adds its thinking time, about 2 s, to each step, even when it decides to stay quiet.
+- Engineers who code with a model as slow as the default (Opus at high effort) and leave `narratorModel` empty get a slow narrator.
+

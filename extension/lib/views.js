@@ -202,7 +202,7 @@ function renderHint() {
     : d.mic === 'starting' ? 'Starting the mic. Speak when it turns red.'
     : d.mic === 'listening' ? 'Listening. Click the mic again when you are done.'
     : d.mic === 'transcribing' ? 'Turning what you said into text…'
-    : d.waitingForAgent ? 'Sent. The tutor answers as soon as it finishes what it is doing.'
+    : d.waitingForAgent ? 'Sent. The narrator is answering; anything for the coder reaches it at its next step.'
     : reviewing ? 'Check what was heard, fix it if needed, then press Enter.'
     : say.value.trim() ? 'Enter to send, Shift+Enter for a new line.'
     : 'Typing or talking pauses the tutor.';

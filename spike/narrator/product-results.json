@@ -1,0 +1,449 @@
+{
+ "model": "sonnet",
+ "costUsd": 0.0709513,
+ "turns": [
+  {
+   "at": 1,
+   "prompt": "Task given to the coder: Transcript records session length\n\nThe coder ran a command:\ncat -n extension/lib/transcript.js; grep -n \"transcript\\.\\(start\\|finish\\|append\\)\\|finishSession\\|function endSession\" extension/extension.js\nOutput:\n     1\t// The transcript: the saved captions of a narrated session, written as it goes\n     2\t// so an interrupted session still leaves a record.\n     3\tconst fs = require('fs');\n     4\tconst os = require('os');\n     5\tconst path = require('path');\n     6\t\n     7\tfunction slug(text) {\n     8\t  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'session';\n     9\t}\n    10\t\n    11\tfunction start(task, workspaceFolder) {\n    12\t  const now = new Date();\n    13\t  const pad = (n) => String(n).padStart(2, '0');\n    14\t  const day = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;\n    15\t  const stamp = `${day}-${pad(now.getHours())}${pad(now.getMinutes())}`;\n    16\t  const project = workspaceFolder ? path.basename(workspaceFolder) : 'no-project';\n    17\t  const dir = path.join(os.homedir(), '.local', 'share', 'coding-tutor', 'transcripts', project);\n    18\t  fs.mkdirSync(dir, { recursive: true });\n    19\t  const file = path.join(dir, `${stamp}-${slug(task)}.md`);\n    20\t  fs.writeFileSync(file, `# ${task}\\n\\nNarrated session in \\`${project}\\`, started ${day} ${pad(now.getHours())}:${pad(now.getMinutes())}.\\n\\n`);\n    21\t  return file;\n    22\t}\n    23\t\n    24\tfunction append(file, caption, workspaceFolder) {\n    25\t  if (caption.engineer) {\n    26\t    fs.appendFileSync(file, `- **You:** ${caption.text}\\n\\n`);\n    27\t    return;\n    28\t  }\n    29\t  let where = '';\n    30\t  if (caption.file) {\n    31\t    const rel = workspaceFolder ? path.relative(workspaceFolder, caption.file) : caption.file;\n    32\t    const lines = caption.startLine ? `:${caption.startLine}${caption.endLine && caption.endLine !== caption.startLine ? '-' + caption.endLine : ''}` : '';\n    33\t    where = `\\n\\n  \\`${rel}${lines}\\``;\n    34\t  }\n    35\t  fs.appendFileSync(file, `- ${caption.text}${where}\\n\\n`);\n    36\t}\n    37\t\n    38\tfunction finish(file, recap) {\n    39\t  fs.appendFileSync(file, `## Recap\\n\\n${recap}\\n`);\n    40\t}\n    41\t\n    42\tmodule.exports = { start, append, finish };\n71:  if (session.transcriptFile) transcript.append(session.transcriptFile, caption, workspaceFolder());\n141:  session.transcriptFile = transcript.start(task, workspaceFolder());\n180:  if (session.ending && result.outcome !== 'paused' && result.outcome !== 'interrupted') return finishSession();\n184:function finishSession() {\n185:  if (session.transcriptFile && session.ending) transcript.finish(session.transcriptFile, session.ending);\n194:async function endSession(m) {\n197:  if (!recap) return finishSession();\n203:  return { ...forAgent(result), ...finishSession() };",
+   "answer": {
+    "parts": [
+     {
+      "say": "The task is for the saved transcript to record how long a session lasted. Right now the start function writes only the start date and time into the header, and keeps nothing for later.",
+      "edit": null,
+      "file": "extension/lib/transcript.js",
+      "startLine": 11,
+      "endLine": 22
+     },
+     {
+      "say": "The finish function just appends the recap, so the file never says when the session ended or how long it ran.",
+      "edit": null,
+      "file": "extension/lib/transcript.js",
+      "startLine": 38,
+      "endLine": 40
+     }
+    ],
+    "toCoder": null
+   },
+   "error": null,
+   "seconds": 2.91,
+   "pointers": [
+    null,
+    null
+   ]
+  },
+  {
+   "at": 4,
+   "prompt": "The engineer interrupted and said: \"Can you re-explain that part again just a bit in simpler terms? Can you re-explain that part but just in simple terms?\"",
+   "answer": {
+    "parts": [
+     {
+      "say": "Sure. When a session begins, the transcript file gets a note saying what day and time it started.",
+      "edit": null,
+      "file": "extension/lib/transcript.js",
+      "startLine": 20,
+      "endLine": 20
+     },
+     {
+      "say": "When it ends, only the summary gets added. So reading the file later, you can't tell how long the session took, and that's what needs adding.",
+      "edit": null,
+      "file": "extension/lib/transcript.js",
+      "startLine": 38,
+      "endLine": 40
+     }
+    ],
+    "toCoder": null
+   },
+   "error": null,
+   "seconds": 2.23,
+   "pointers": [
+    null,
+    null
+   ]
+  },
+  {
+   "at": 9,
+   "prompt": "Edit 1: the coder edited /var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/lib/transcript.js; the changed code is now at lines 38 to 60.\nIt replaced:\nfunction finish(file, recap) {\n  fs.appendFileSync(file, `## Recap\\n\\n${recap}\\n`);\n}\n\nmodule.exports = { start, append, finish };\nwith:\n// How long something took, in words a person would say: \"under a minute\",\n// \"12 minutes\", \"1 hour 5 minutes\".\nfunction formatDuration(ms) {\n  const minutes = Math.round(ms / 60000);\n  if (minutes < 1) return 'under a minute';\n  const hours = Math.floor(minutes / 60);\n  const rest = minutes % 60;\n  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;\n  if (!hours) return plural(rest, 'minute');\n  return rest ? `${plural(hours, 'hour')} ${plural(rest, 'minute')}` : plural(hours, 'hour');\n}\n\n// Closes the transcript: the recap, if there is one, then when the session\n// ended and how long it took.\nfunction finish(file, recap, startedAt, endedAt = new Date()) {\n  const pad = (n) => String(n).padStart(2, '0');\n  const ended = `${pad(endedAt.getHours())}:${pad(endedAt.getMinutes())}`;\n  const recapPart = recap ? `## Recap\\n\\n${recap}\\n\\n` : '';\n  fs.appendFileSync(file, `${recapPart}Session ended ${ended}, after ${formatDuration(endedAt - startedAt)}.\\n`);\n}\n\nmodule.exports = { start, append, finish, formatDuration };",
+   "answer": {
+    "parts": [
+     {
+      "say": "The coder added a duration formatter, which turns a length of time into everyday words, like under a minute or one hour five minutes.",
+      "edit": 1,
+      "file": null,
+      "startLine": null,
+      "endLine": null
+     },
+     {
+      "say": "The finish function now takes the start time and ends the transcript with when the session ended and how long it took. The recap is now optional, so that closing line can be written without one.",
+      "edit": 1,
+      "file": null,
+      "startLine": null,
+      "endLine": null
+     }
+    ],
+    "toCoder": null
+   },
+   "error": null,
+   "seconds": 3.002,
+   "pointers": [
+    {
+     "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/lib/transcript.js",
+     "startLine": 38,
+     "endLine": 60,
+     "shown": "// How long something took, in words a person would say: \"under a minute\",\n// \"12 minutes\", \"1 hour 5 minutes\".\nfunction formatDuration(ms) {\n  const minutes = Math.round(ms / 60000);\n  if (minutes < 1) return 'under a minute';\n  const hours = Math.floor(minutes / 60);\n  const rest = minutes % 60;\n  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;\n  if (!hours) return plural(rest, 'minute');\n  return rest ? `${plural(hours, 'hour')} ${plural(rest, 'minute')}` : plural(hours, 'hour');\n}\n\n// Closes the transcript: the recap, if there is one, then when the session\n// ended and how long it took.\nfunction finish(file, recap, startedAt, endedAt = new Date()) {\n  const pad = (n) => String(n).padStart(2, '0');\n  const ended = `${pad(endedAt.getHours())}:${pad(endedAt.getMinutes())}`;\n  const recapPart = recap ? `## Recap\\n\\n${recap}\\n\\n` : '';\n  fs.appendFileSync(file, `${recapPart}Session ended ${ended}, after ${formatDuration(endedAt - startedAt)}.\\n`);\n}\n\nmodule.exports = { start, append, finish, formatDuration };\n"
+    },
+    {
+     "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/lib/transcript.js",
+     "startLine": 38,
+     "endLine": 60,
+     "shown": "// How long something took, in words a person would say: \"under a minute\",\n// \"12 minutes\", \"1 hour 5 minutes\".\nfunction formatDuration(ms) {\n  const minutes = Math.round(ms / 60000);\n  if (minutes < 1) return 'under a minute';\n  const hours = Math.floor(minutes / 60);\n  const rest = minutes % 60;\n  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;\n  if (!hours) return plural(rest, 'minute');\n  return rest ? `${plural(hours, 'hour')} ${plural(rest, 'minute')}` : plural(hours, 'hour');\n}\n\n// Closes the transcript: the recap, if there is one, then when the session\n// ended and how long it took.\nfunction finish(file, recap, startedAt, endedAt = new Date()) {\n  const pad = (n) => String(n).padStart(2, '0');\n  const ended = `${pad(endedAt.getHours())}:${pad(endedAt.getMinutes())}`;\n  const recapPart = recap ? `## Recap\\n\\n${recap}\\n\\n` : '';\n  fs.appendFileSync(file, `${recapPart}Session ended ${ended}, after ${formatDuration(endedAt - startedAt)}.\\n`);\n}\n\nmodule.exports = { start, append, finish, formatDuration };\n"
+    }
+   ]
+  },
+  {
+   "at": 12,
+   "prompt": "The coder ran a command:\ngrep -n \"session = {\\|session.transcriptFile = transcript.start\\|function finishSession\" extension/extension.js; sed -n 184,192p extension/extension.js\nOutput:\n38:const session = { active: false, task: '', captions: [], transcriptFile: null, busy: false, ending: null };\n141:  session.transcriptFile = transcript.start(task, workspaceFolder());\n184:function finishSession() {\nfunction finishSession() {\n  if (session.transcriptFile && session.ending) transcript.finish(session.transcriptFile, session.ending);\n  if (micState.recording) stopMic();\n  session.ending = null;\n  session.active = false;\n  clearPointer();\n  pushState();\n  return { ok: true, outcome: 'ended', transcript: session.transcriptFile };\n}",
+   "answer": {
+    "parts": [
+     {
+      "say": "The coder is checking the caller in the extension. It only calls finish when there's a recap, and it doesn't pass a start time yet, so that has to change too.",
+      "edit": null,
+      "file": "extension/extension.js",
+      "startLine": 184,
+      "endLine": 185
+     }
+    ],
+    "toCoder": null
+   },
+   "error": null,
+   "seconds": 2.123,
+   "pointers": [
+    null
+   ]
+  },
+  {
+   "at": 15,
+   "prompt": "Edit 2: the coder edited /var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/extension.js; the changed code is now at lines 143 to 143.\nIt replaced:\n  session.transcriptFile = transcript.start(task, workspaceFolder());\nwith:\n  session.startedAt = new Date();\n  session.transcriptFile = transcript.start(task, workspaceFolder());",
+   "answer": {
+    "parts": [
+     {
+      "say": "When a session starts, the extension now remembers that moment on the session, so there's something to measure the length from.",
+      "edit": 2,
+      "file": null,
+      "startLine": null,
+      "endLine": null
+     }
+    ],
+    "toCoder": null
+   },
+   "error": null,
+   "seconds": 1.583,
+   "pointers": [
+    {
+     "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/extension.js",
+     "startLine": 143,
+     "endLine": 143,
+     "shown": "  session.startedAt = new Date();"
+    }
+   ]
+  },
+  {
+   "at": 16,
+   "prompt": "Edit 3: the coder edited /var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/extension.js; the changed code is now at lines 188 to 188.\nIt replaced:\n  if (session.transcriptFile && session.ending) transcript.finish(session.transcriptFile, session.ending);\nwith:\n  if (session.transcriptFile && session.active) transcript.finish(session.transcriptFile, session.ending, session.startedAt);",
+   "answer": {
+    "parts": [
+     {
+      "say": "Finishing a session now writes to the transcript whenever the session is still active, not only when there's a recap. So a session without a recap still gets its length, and the start time is passed along.",
+      "edit": 3,
+      "file": null,
+      "startLine": null,
+      "endLine": null
+     }
+    ],
+    "toCoder": null
+   },
+   "error": null,
+   "seconds": 2.334,
+   "pointers": [
+    {
+     "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/extension.js",
+     "startLine": 188,
+     "endLine": 188,
+     "shown": "  if (session.transcriptFile && session.active) transcript.finish(session.transcriptFile, session.ending, session.startedAt);"
+    }
+   ]
+  },
+  {
+   "at": 17,
+   "prompt": "Edit 4: the coder edited /var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/extension.js; the changed code is now at lines 38 to 38.\nIt replaced:\nconst session = { active: false, task: '', captions: [], transcriptFile: null, busy: false, ending: null };\nwith:\nconst session = { active: false, task: '', captions: [], transcriptFile: null, startedAt: null, busy: false, ending: null };",
+   "answer": {
+    "parts": [
+     {
+      "say": "A small tidy-up: the start time is now listed in the session's initial fields, empty until a session begins.",
+      "edit": 4,
+      "file": null,
+      "startLine": null,
+      "endLine": null
+     }
+    ],
+    "toCoder": null
+   },
+   "error": null,
+   "seconds": 1.562,
+   "pointers": [
+    {
+     "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/extension.js",
+     "startLine": 38,
+     "endLine": 38,
+     "shown": "const session = { active: false, task: '', captions: [], transcriptFile: null, startedAt: null, busy: false, ending: null };"
+    }
+   ]
+  },
+  {
+   "at": 18,
+   "prompt": "The coder ran a command:\ngrep -n \"session.startedAt = new Date\\|transcript.finish\" extension/extension.js\nOutput:\n141:  session.startedAt = new Date();\n186:  if (session.transcriptFile && session.active) transcript.finish(session.transcriptFile, session.ending, session.startedAt);",
+   "answer": {
+    "parts": [],
+    "toCoder": null
+   },
+   "error": null,
+   "seconds": 2.188,
+   "pointers": []
+  },
+  {
+   "at": 21,
+   "prompt": "The engineer interrupted and said: \"Um, could we actually go a little faster? I don't want a line-by-line breakdown of every little thing. I just want to, uh, just skim over it all.\"",
+   "answer": {
+    "parts": [
+     {
+      "say": "Sure, I'll keep it to the short version from here.",
+      "edit": null,
+      "file": null,
+      "startLine": null,
+      "endLine": null
+     }
+    ],
+    "toCoder": null
+   },
+   "error": null,
+   "seconds": 1.471,
+   "pointers": [
+    null
+   ]
+  },
+  {
+   "at": 23,
+   "prompt": "The coder ran a command:\ncat > tests/transcript.test.js <<'EOF'\nconst test = require('node:test');\nconst assert = require('node:assert');\nconst fs = require('fs');\nconst os = require('os');\nconst path = require('path');\nconst { finish, formatDuration } = require('../extension/lib/transcript');\n\ntest('formatDuration says the length the way a person would', () => {\n  assert.strictEqual(formatDuration(20 * 1000), 'under a minute');\n  assert.strictEqual(formatDuration(60 * 1000), '1 minute');\n  assert.strictEqual(formatDuration(12 * 60 * 1000), '12 minutes');\n  assert.strictEqual(formatDuration(60 * 60 * 1000), '1 hour');\n  assert.strictEqual(formatDuration(125 * 60 * 1000), '2 hours 5 minutes');\n});\n\ntest('finish writes the recap, then when the session ended and how long it took', () => {\n  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ct-')), 't.md');\n  fs.writeFileSync(file, '# Task\\n\\n');\n  finish(file, 'All done.', new Date(2026, 10, 24, 16, 0), new Date(2026, 10, 24, 16, 12));\n  assert.strictEqual(fs.readFileSync(file, 'utf8'), '# Task\\n\\n## Recap\\n\\nAll done.\\n\\nSession ended 16:12, after 12 minutes.\\n');\n});\n\ntest('finish without a recap still records the ending', () => {\n  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ct-')), 't.md');\n  fs.writeFileSync(file, '');\n  finish(file, null, new Date(2026, 10, 24, 9, 0), new Date(2026, 10, 24, 10, 5));\n  assert.strictEqual(fs.readFileSync(file, 'utf8'), 'Session ended 10:05, after 1 hour 5 minutes.\\n');\n});\nEOF\nflatpak-spawn --host sh -c \"cd '$PWD' && timeout 90 node --test --test-timeout=10000 tests/*.test.js 2>&1 | grep -E '^not ok|^# (pass|fail)|Error:|expected|actual'; node --check extension/extension.js && echo syntax-ok\"\nOutput:\n# pass 27\n# fail 0\nsyntax-ok",
+   "answer": {
+    "parts": [
+     {
+      "say": "The coder added tests for the duration wording and the closing line, with and without a recap. All 27 tests pass and the extension passes a syntax check.",
+      "edit": null,
+      "file": null,
+      "startLine": null,
+      "endLine": null
+     }
+    ],
+    "toCoder": null
+   },
+   "error": null,
+   "seconds": 1.63,
+   "pointers": [
+    null
+   ]
+  },
+  {
+   "at": 26,
+   "prompt": "The engineer interrupted and said: \"Where did you add this? Wait, where did you add this? Show me. and then continue\"",
+   "answer": {
+    "parts": [
+     {
+      "say": "The new tests are in a transcript test file in the tests folder.",
+      "edit": null,
+      "file": "tests/transcript.test.js",
+      "startLine": 9,
+      "endLine": 29
+     },
+     {
+      "say": "The feature they test, the duration wording and the new closing line, is in the transcript module.",
+      "edit": 1,
+      "file": null,
+      "startLine": null,
+      "endLine": null
+     },
+     {
+      "say": "And the extension saves the start time and passes it along when the session finishes.",
+      "edit": 3,
+      "file": null,
+      "startLine": null,
+      "endLine": null
+     }
+    ],
+    "toCoder": null
+   },
+   "error": null,
+   "seconds": 4.797,
+   "pointers": [
+    null,
+    {
+     "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/lib/transcript.js",
+     "startLine": 38,
+     "endLine": 60,
+     "shown": "// How long something took, in words a person would say: \"under a minute\",\n// \"12 minutes\", \"1 hour 5 minutes\".\nfunction formatDuration(ms) {\n  const minutes = Math.round(ms / 60000);\n  if (minutes < 1) return 'under a minute';\n  const hours = Math.floor(minutes / 60);\n  const rest = minutes % 60;\n  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;\n  if (!hours) return plural(rest, 'minute');\n  return rest ? `${plural(hours, 'hour')} ${plural(rest, 'minute')}` : plural(hours, 'hour');\n}\n\n// Closes the transcript: the recap, if there is one, then when the session\n// ended and how long it took.\nfunction finish(file, recap, startedAt, endedAt = new Date()) {\n  const pad = (n) => String(n).padStart(2, '0');\n  const ended = `${pad(endedAt.getHours())}:${pad(endedAt.getMinutes())}`;\n  const recapPart = recap ? `## Recap\\n\\n${recap}\\n\\n` : '';\n  fs.appendFileSync(file, `${recapPart}Session ended ${ended}, after ${formatDuration(endedAt - startedAt)}.\\n`);\n}\n\nmodule.exports = { start, append, finish, formatDuration };\n"
+    },
+    {
+     "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/extension.js",
+     "startLine": 188,
+     "endLine": 188,
+     "shown": "  if (session.transcriptFile && session.active) transcript.finish(session.transcriptFile, session.ending, session.startedAt);"
+    }
+   ]
+  },
+  {
+   "at": 26,
+   "prompt": "The coder has ended its turn. Its last message:\nDone. Every transcript now ends with when the session finished and how long it took, even without a recap. To see it, the extension needs repackaging and a reload, so this session's own transcript will not have the line yet. Nothing is committed.\n\nGive the recap now. If the coder ended by asking the engineer something instead, say the question; the engineer will answer in the chat.",
+   "answer": {
+    "parts": [
+     {
+      "say": "Done: every transcript now ends with when the session finished and how long it took, with or without a recap. Tests passed, and nothing is committed.",
+      "edit": 1,
+      "file": null,
+      "startLine": null,
+      "endLine": null
+     },
+     {
+      "say": "To check it yourself, repackage and reload the extension, then run a new session and look at the end of its transcript. This session's transcript won't have the line yet.",
+      "edit": 3,
+      "file": null,
+      "startLine": null,
+      "endLine": null
+     }
+    ],
+    "toCoder": null
+   },
+   "error": null,
+   "seconds": 2.24,
+   "pointers": [
+    {
+     "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/lib/transcript.js",
+     "startLine": 38,
+     "endLine": 60,
+     "shown": "// How long something took, in words a person would say: \"under a minute\",\n// \"12 minutes\", \"1 hour 5 minutes\".\nfunction formatDuration(ms) {\n  const minutes = Math.round(ms / 60000);\n  if (minutes < 1) return 'under a minute';\n  const hours = Math.floor(minutes / 60);\n  const rest = minutes % 60;\n  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;\n  if (!hours) return plural(rest, 'minute');\n  return rest ? `${plural(hours, 'hour')} ${plural(rest, 'minute')}` : plural(hours, 'hour');\n}\n\n// Closes the transcript: the recap, if there is one, then when the session\n// ended and how long it took.\nfunction finish(file, recap, startedAt, endedAt = new Date()) {\n  const pad = (n) => String(n).padStart(2, '0');\n  const ended = `${pad(endedAt.getHours())}:${pad(endedAt.getMinutes())}`;\n  const recapPart = recap ? `## Recap\\n\\n${recap}\\n\\n` : '';\n  fs.appendFileSync(file, `${recapPart}Session ended ${ended}, after ${formatDuration(endedAt - startedAt)}.\\n`);\n}\n\nmodule.exports = { start, append, finish, formatDuration };\n"
+    },
+    {
+     "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/extension.js",
+     "startLine": 188,
+     "endLine": 188,
+     "shown": "  if (session.transcriptFile && session.active) transcript.finish(session.transcriptFile, session.ending, session.startedAt);"
+    }
+   ]
+  }
+ ],
+ "coder": [
+  {
+   "at": 2,
+   "text": "Here is the problem. Every session writes a transcript, and this is the module that writes it. The opening line records when the session started, but nothing ever records when it ended.",
+   "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/lib/transcript.js",
+   "startLine": 11,
+   "endLine": 22
+  },
+  {
+   "at": 3,
+   "text": "The end of a session goes through this finish function, which only adds the recap. And the extension only calls it when there is a recap, so a session ended without one leaves no ending at all. So today, reading a transcript, you cannot tell whether the session took five minutes or an hour.",
+   "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/lib/transcript.js",
+   "startLine": 38,
+   "endLine": 40
+  },
+  {
+   "at": 6,
+   "text": "Sure, more simply. A transcript is like a log of the session, and it has a start time written at the top. But it never gets an end time written at the bottom.",
+   "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/lib/transcript.js",
+   "startLine": 20,
+   "endLine": 20
+  },
+  {
+   "at": 7,
+   "text": "This little function is the one that writes the end of the log. Right now it only writes the summary, nothing about time. So we fix it here, by having it also write how long the session took.",
+   "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/lib/transcript.js",
+   "startLine": 38,
+   "endLine": 40
+  },
+  {
+   "at": 8,
+   "text": "I will start in this finish function. It will take the time the session started, work out how long it lasted, and write an end line with the finish time and the length. I will also make it work when there is no recap, so every session gets an ending.",
+   "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/lib/transcript.js",
+   "startLine": 38,
+   "endLine": 40
+  },
+  {
+   "at": 10,
+   "text": "First, a small helper that turns a length of time into words you would say out loud, like under a minute, twelve minutes, or one hour five minutes. I made it its own function so it can be tested on its own.",
+   "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/lib/transcript.js",
+   "startLine": 38,
+   "endLine": 48
+  },
+  {
+   "at": 11,
+   "text": "And the finish function now takes the start time. It writes the recap only if there is one, and then always ends with a line saying when the session ended and how long it took.",
+   "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/lib/transcript.js",
+   "startLine": 50,
+   "endLine": 56
+  },
+  {
+   "at": 14,
+   "text": "The other half is in the extension. When a session begins, it creates the transcript here, but it does not remember the time. I will have it note the start time right at this point.",
+   "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/extension.js",
+   "startLine": 141,
+   "endLine": 141
+  },
+  {
+   "at": 19,
+   "text": "Here the start time is now remembered when the session begins.",
+   "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/extension.js",
+   "startLine": 141,
+   "endLine": 141
+  },
+  {
+   "at": 20,
+   "text": "And here, when the session ends, the extension now always closes the transcript and hands it the start time. Before, it skipped this whenever there was no recap. I check that the session is still active, so a transcript can never be closed twice.",
+   "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/extension.js",
+   "startLine": 185,
+   "endLine": 186
+  },
+  {
+   "at": 22,
+   "text": "Got it, I will skim from here. The end of the session now always gets closed with its length. Last step is a quick test, then I will wrap up.",
+   "file": null,
+   "startLine": null,
+   "endLine": null
+  },
+  {
+   "at": 25,
+   "text": "I added three tests: the length in words, a transcript with a recap, and one without. All twenty seven tests pass.",
+   "file": null,
+   "startLine": null,
+   "endLine": null
+  },
+  {
+   "at": 28,
+   "text": "The main change is here, in the transcript module. This function closes the transcript, and now writes when the session ended and how long it took.",
+   "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/lib/transcript.js",
+   "startLine": 50,
+   "endLine": 56
+  },
+  {
+   "at": 29,
+   "text": "And here in the extension, it remembers the start time when the session begins.",
+   "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/extension.js",
+   "startLine": 141,
+   "endLine": 141
+  },
+  {
+   "at": 30,
+   "text": "And it passes that start time on here, when the session ends. The tests are in a new transcript test file.",
+   "file": "/var/home/lcourant/Documents/Personal/projects/coding-tutor/extension/extension.js",
+   "startLine": 186,
+   "endLine": 186
+  }
+ ],
+ "recap": "Done: every transcript now ends with when the session finished and how long it took, with or without a recap. Tests passed, and nothing is committed. To check it yourself, repackage and reload the extension, then run a new session and look at the end of its transcript. This session's transcript won't have the line yet."
+}

@@ -1,186 +1,176 @@
-// The narrator speaks a narration sentence by sentence and obeys the engineer's
-// controls: pause, resume, interrupt and skip. It knows nothing about VS Code;
-// the voice and the player are passed in, so it can be tested on its own.
-const { splitSentences, readingTimeMs } = require('./sentences');
+// The narrator: the separate model that watches the coder's work and says the
+// narration. It runs through the engineer's own agent CLI, with their login, as
+// one long-running headless process per session, so its context stays cached
+// between narrations. It has no tools and no MCP servers: it knows only what it
+// is told, which is only what the coder's own tools returned.
+const { spawn: nodeSpawn } = require('child_process');
 
-// The engineer's controls, shared by the panel (which changes them) and the
-// narrator (which waits on them).
-class Control {
-  constructor() {
-    this.paused = false;
-    this.message = null; // what the engineer said, until the agent picks it up
-    this.skipped = false;
-    this.stopCurrent = null; // cuts off the sentence being played
-    this.listeners = new Set();
+// What the narrator answers each time it is told something: what to say, in
+// parts said one after the other, each with the pointer on its own code (so
+// "show me" can walk through several places), and anything to pass to the coder.
+const PART_SCHEMA = {
+  type: 'object',
+  properties: {
+    say: { type: 'string', description: 'One to three short sentences, to be spoken.' },
+    edit: { type: ['integer', 'null'], description: 'The number of the edit this part is about, to point at it.' },
+    file: { type: ['string', 'null'], description: 'A file the coder read, to point at lines in it, when the part is not about an edit.' },
+    startLine: { type: ['integer', 'null'] },
+    endLine: { type: ['integer', 'null'] },
+  },
+  required: ['say', 'edit', 'file', 'startLine', 'endLine'],
+  additionalProperties: false,
+};
+const ANSWER_SCHEMA = {
+  type: 'object',
+  properties: {
+    parts: { type: 'array', items: PART_SCHEMA, description: 'What to say now, in order. Empty to stay quiet.' },
+    toCoder: { type: ['string', 'null'], description: 'What to pass to the coder from the engineer, or null when you answered it yourself.' },
+  },
+  required: ['parts', 'toCoder'],
+  additionalProperties: false,
+};
+
+const TURN_TIMEOUT_MS = 90 * 1000;
+
+// How to start the narrator through each agent's CLI. `cli` is the path of the
+// coder's own CLI, as its adapter reported it. An empty model means the agent's
+// default model, the one the engineer codes with.
+const LAUNCHERS = {
+  'claude-code': ({ cli, model, systemPrompt }) => ({
+    command: cli || 'claude',
+    args: [
+      '-p',
+      '--input-format', 'stream-json',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--tools', '',
+      '--strict-mcp-config',
+      '--no-session-persistence',
+      '--system-prompt', systemPrompt,
+      '--json-schema', JSON.stringify(ANSWER_SCHEMA),
+      ...(model ? ['--model', model] : []),
+    ],
+  }),
+};
+
+function launchFor(agent, options) {
+  const launcher = LAUNCHERS[agent];
+  if (!launcher) throw new Error(`no narrator launcher for the agent "${agent}"`);
+  return launcher(options);
+}
+
+// One message to the narrator process, in the CLI's stream-json input format.
+function userMessage(text) {
+  return JSON.stringify({ type: 'user', message: { role: 'user', content: text } }) + '\n';
+}
+
+// createNarrator({command, args, cwd}) -> { ask(text), costUsd, turns, close() }.
+// ask() resolves {answer, error}; it never rejects, so a broken narrator leaves
+// the session running without narration rather than stopping the coder.
+function createNarrator({ command, args, cwd, env, spawn = nodeSpawn, log = () => {}, turnTimeoutMs = TURN_TIMEOUT_MS }) {
+  let child = null;
+  let buffer = '';
+  let pending = null; // {resolve, timer}
+  let chain = Promise.resolve();
+  let closed = false;
+  // The CLI reports the session's cost so far; a restarted process starts again
+  // from zero, so earlier processes' costs are kept apart.
+  let costBefore = 0;
+  let costNow = 0;
+  const state = { turns: 0 };
+
+  const settle = (result) => {
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    const { resolve } = pending;
+    pending = null;
+    resolve(result);
+  };
+
+  function onLine(line) {
+    if (!line.trim()) return;
+    let msg;
+    try { msg = JSON.parse(line); } catch { return; }
+    if (msg.type !== 'result') return;
+    if (typeof msg.total_cost_usd === 'number') costNow = msg.total_cost_usd;
+    if (msg.is_error || !msg.structured_output) {
+      settle({ answer: null, error: String(msg.result || msg.subtype || 'the narrator gave no answer') });
+    } else {
+      settle({ answer: msg.structured_output, error: null });
+    }
   }
 
-  onChange(fn) {
-    this.listeners.add(fn);
-    return () => this.listeners.delete(fn);
-  }
-
-  changed() {
-    for (const fn of [...this.listeners]) fn();
-  }
-
-  stop() {
-    if (this.stopCurrent) this.stopCurrent();
-  }
-
-  pause() {
-    if (this.paused) return;
-    this.paused = true;
-    this.stop();
-    this.changed();
-  }
-
-  resume() {
-    if (!this.paused) return;
-    this.paused = false;
-    this.changed();
-  }
-
-  togglePause() {
-    if (this.paused) this.resume();
-    else this.pause();
-  }
-
-  interrupt(text) {
-    this.message = this.message ? `${this.message}\n${text}` : text;
-    this.paused = false;
-    this.stop();
-    this.changed();
-  }
-
-  skip() {
-    this.skipped = true;
-    this.stop();
-    this.changed();
-  }
-
-  takeMessage() {
-    const message = this.message;
-    this.message = null;
-    this.changed();
-    return message;
-  }
-
-  reset() {
-    this.paused = false;
-    this.message = null;
-    this.skipped = false;
-    this.changed();
-  }
-
-  // Resolves 'resumed', 'interrupted', or 'timeout' if still paused after `ms`.
-  waitUntilResumed(ms) {
-    return new Promise((resolve) => {
-      const check = () => {
-        if (this.message) return 'interrupted';
-        if (!this.paused) return 'resumed';
-        return null;
-      };
-      const now = check();
-      if (now) return resolve(now);
-      const timer = setTimeout(() => { off(); resolve('timeout'); }, ms);
-      const off = this.onChange(() => {
-        const r = check();
-        if (r) { clearTimeout(timer); off(); resolve(r); }
-      });
+  function start() {
+    costBefore += costNow;
+    costNow = 0;
+    buffer = '';
+    log(`starting the narrator: ${command} ${args.filter((a) => a.length < 80).join(' ')}`);
+    const proc = spawn(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    child = proc;
+    proc.stdout.on('data', (d) => {
+      buffer += d;
+      let at;
+      while ((at = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, at);
+        buffer = buffer.slice(at + 1);
+        onLine(line);
+      }
+    });
+    proc.stderr.on('data', (d) => log(`narrator: ${String(d).trim()}`));
+    proc.stdin.on('error', () => {}); // a dead process: reported through 'exit'
+    // Only the current process's end matters: one that was given up on and
+    // killed must not answer for its replacement.
+    proc.on('error', (e) => {
+      const why = e.code === 'ENOENT' ? `"${command}" was not found` : e.message;
+      log(`narrator failed to start: ${why}`);
+      if (child !== proc) return;
+      child = null;
+      settle({ answer: null, error: why });
+    });
+    proc.on('exit', (code, signal) => {
+      if (child !== proc) return;
+      child = null;
+      if (!closed) log(`narrator exited (${signal || code})`);
+      settle({ answer: null, error: `the narrator exited (${signal || code})` });
     });
   }
-}
 
-// A stand-in for the voice when it is muted or broken: the sentence is "played"
-// for as long as it takes to read, and can be stopped like real audio.
-function silentPlay(ms) {
-  let stop;
-  const done = new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    stop = () => { clearTimeout(timer); resolve(); };
-  });
-  return { done, stop };
-}
-
-// synth(sentence, cfg) -> Promise<audio>; play(audio) -> {done, stop};
-// isMuted() is read before every sentence so muting takes effect at once.
-function createNarrator({ control, synth, play, isMuted, quiet = silentPlay, readingTime = readingTimeMs }) {
-  let held = null; // what is left of a narration when a pause outlasted the call
-
-  async function run(sentences, index, cfg, holdLimitMs) {
-    control.skipped = false;
-    let voiceError = null;
-    let wasMuted = false;
-    const clips = new Map();
-    const clip = (i) => {
-      if (!clips.has(i)) {
-        clips.set(i, synth(sentences[i], cfg).catch((e) => { voiceError = voiceError || e.message; return null; }));
-      }
-      return clips.get(i);
-    };
-
-    while (index < sentences.length) {
-      if (control.message) return { outcome: 'interrupted', voiceError, muted: wasMuted };
-      if (control.paused) {
-        const r = await control.waitUntilResumed(holdLimitMs);
-        if (r === 'interrupted') return { outcome: 'interrupted', voiceError, muted: wasMuted };
-        if (r === 'timeout') {
-          held = { sentences, index, cfg };
-          return { outcome: 'paused', voiceError, muted: wasMuted };
-        }
-      }
-
-      const muted = isMuted();
-      wasMuted = wasMuted || muted;
-      const audio = muted || voiceError ? null : await clip(index);
-      if (!muted && !voiceError && index + 1 < sentences.length) clip(index + 1); // get the next one ready
-      if (control.message || control.paused) continue;
-
-      const playing = audio ? play(audio) : quiet(readingTime(sentences[index]));
-      control.stopCurrent = playing.stop;
-      try {
-        await playing.done;
-      } catch (e) {
-        voiceError = voiceError || e.message; // the player failed: say it again, silently
-        continue;
-      } finally {
-        control.stopCurrent = null;
-      }
-
-      if (control.message) return { outcome: 'interrupted', voiceError, muted: wasMuted };
-      if (control.paused) continue; // cut off by a pause: this sentence is said again on resume
-      if (control.skipped) return { outcome: 'skipped', voiceError, muted: wasMuted };
-      if (isMuted() !== muted) continue; // muted or unmuted mid-sentence: say it again the new way
-      index += 1;
-    }
-    return { outcome: 'spoken', voiceError, muted: wasMuted };
+  function turn(text) {
+    if (closed) return Promise.resolve({ answer: null, error: 'the narrator was closed' });
+    if (!child) start();
+    state.turns += 1;
+    return new Promise((resolve) => {
+      pending = {
+        resolve,
+        timer: setTimeout(() => {
+          log('narrator took too long; restarting it');
+          const stuck = child;
+          child = null;
+          if (stuck) stuck.kill();
+          settle({ answer: null, error: 'the narrator took too long to answer' });
+        }, turnTimeoutMs),
+      };
+      child.stdin.write(userMessage(text));
+    });
   }
 
   return {
-    // Speak a whole narration. Resolves when it has been said, or earlier if the
-    // engineer interrupted, skipped, or paused for longer than `holdLimitMs`.
-    narrate(text, cfg, holdLimitMs) {
-      held = null;
-      return run(splitSentences(text), 0, cfg, holdLimitMs);
+    // Tell the narrator something; resolves with its answer. Calls are answered
+    // one at a time, in order.
+    ask(text) {
+      const result = chain.then(() => turn(text));
+      chain = result.then(() => {});
+      return result;
     },
-
-    // Called while paused: waits for the engineer, then says what was left.
-    async resumeHeld(holdLimitMs) {
-      if (held) {
-        const { sentences, index, cfg } = held;
-        held = null;
-        return run(sentences, index, cfg, holdLimitMs);
-      }
-      const r = await control.waitUntilResumed(holdLimitMs);
-      if (r === 'interrupted') return { outcome: 'interrupted' };
-      if (r === 'timeout') return { outcome: 'paused' };
-      return { outcome: 'resumed' };
-    },
-
-    hasHeld() {
-      return held !== null;
+    get costUsd() { return costBefore + costNow; },
+    get turns() { return state.turns; },
+    close() {
+      closed = true;
+      if (child) child.kill();
+      child = null;
+      settle({ answer: null, error: 'the narrator was closed' });
     },
   };
 }
 
-module.exports = { Control, createNarrator, silentPlay };
+module.exports = { createNarrator, launchFor, ANSWER_SCHEMA, LAUNCHERS };

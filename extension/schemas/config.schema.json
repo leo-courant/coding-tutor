@@ -20,7 +20,12 @@
       "default": "outline"
     },
     "language": { "description": "Narration language.", "enum": ["en"], "default": "en" },
-    "muted": { "description": "Captions only, no voice. The agent is still paced at reading speed.", "type": "boolean", "default": false },
-    "speed": { "description": "Speaking speed. 1.0 is normal.", "type": "number", "minimum": 0.5, "maximum": 2.0, "default": 1.0 }
+    "muted": { "description": "Captions only, no voice. The coder is still paced at reading speed.", "type": "boolean", "default": false },
+    "speed": { "description": "Speaking speed. 1.0 is normal.", "type": "number", "minimum": 0.5, "maximum": 2.0, "default": 1.0 },
+    "narratorModel": {
+      "description": "The model the narrator runs on, passed to your agent's CLI as is (for Claude Code, its --model). Empty: your agent's default model, the one you code with.",
+      "type": "string",
+      "default": ""
+    }
   }
 }

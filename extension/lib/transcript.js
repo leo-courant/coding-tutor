@@ -22,6 +22,10 @@ function start(task, workspaceFolder) {
 }
 
 function append(file, caption, workspaceFolder) {
+  if (caption.notice) {
+    fs.appendFileSync(file, `- _${caption.text}_\n\n`);
+    return;
+  }
   if (caption.engineer) {
     fs.appendFileSync(file, `- **You:** ${caption.text}\n\n`);
     return;
@@ -48,12 +52,13 @@ function formatDuration(ms) {
 }
 
 // Closes the transcript: the recap, if there is one, then when the session
-// ended and how long it took.
-function finish(file, recap, startedAt, endedAt = new Date()) {
+// ended and how long it took, and any note (such as what the narrator cost).
+function finish(file, recap, startedAt, endedAt = new Date(), note = null) {
   const pad = (n) => String(n).padStart(2, '0');
   const ended = `${pad(endedAt.getHours())}:${pad(endedAt.getMinutes())}`;
   const recapPart = recap ? `## Recap\n\n${recap}\n\n` : '';
-  fs.appendFileSync(file, `${recapPart}Session ended ${ended}, after ${formatDuration(endedAt - startedAt)}.\n`);
+  const notePart = note ? ` ${note}` : '';
+  fs.appendFileSync(file, `${recapPart}Session ended ${ended}, after ${formatDuration(endedAt - startedAt)}.${notePart}\n`);
 }
 
 module.exports = { start, append, finish, formatDuration };

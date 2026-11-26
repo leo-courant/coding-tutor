@@ -1,144 +1,103 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { Control, createNarrator } = require('../extension/lib/narrator');
+const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
+const { createNarrator, launchFor } = require('../extension/lib/narrator');
 
-const CFG = { voice: 'am_adam' };
-const tick = (ms = 5) => new Promise((r) => setTimeout(r, ms));
-
-// A fake voice: every sentence "plays" for `ms` unless stopped. Records what
-// was started and what finished.
-function setup({ ms = 30, muted = false, synthFails = false } = {}) {
-  const control = new Control();
+// A fake agent CLI in stream-json mode: answers each user message with a result
+// line made by `reply(text, n)`. Records every process it starts.
+function fakeCli(reply) {
   const started = [];
-  const finished = [];
-  const quiet = [];
-  let mutedNow = muted;
-  const fakePlay = (label, list) => {
-    let stop;
-    const done = new Promise((resolve) => {
-      const t = setTimeout(() => { finished.push(label); resolve(); }, ms);
-      stop = () => { clearTimeout(t); resolve(); };
+  const spawn = (command, args) => {
+    const child = new EventEmitter();
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.killed = false;
+    child.kill = () => { child.killed = true; setImmediate(() => child.emit('exit', null, 'SIGTERM')); };
+    child.got = [];
+    let cost = 0;
+    let buf = '';
+    child.stdin.on('data', (d) => {
+      buf += d;
+      let at;
+      while ((at = buf.indexOf('\n')) >= 0) {
+        const msg = JSON.parse(buf.slice(0, at));
+        buf = buf.slice(at + 1);
+        child.got.push(msg.message.content);
+        const r = reply(msg.message.content, child.got.length);
+        if (r === undefined) continue; // never answers
+        cost += 0.01;
+        setImmediate(() => child.stdout.write(JSON.stringify({ type: 'result', total_cost_usd: cost, ...r }) + '\n'));
+      }
     });
-    list.push(label);
-    return { done, stop };
+    started.push({ command, args, child });
+    return child;
   };
-  const narrator = createNarrator({
-    control,
-    synth: async (s) => { if (synthFails) throw new Error('voice server down'); return s; },
-    play: (audio) => fakePlay(audio, started),
-    isMuted: () => mutedNow,
-    quiet: () => fakePlay(`quiet#${quiet.length}`, quiet),
-    readingTime: () => ms,
-  });
-  return { control, narrator, started, finished, quiet, setMuted: (v) => { mutedNow = v; } };
+  return { spawn, started };
 }
 
-test('speaks every sentence in order', async () => {
-  const { narrator, finished } = setup();
-  const r = await narrator.narrate('One. Two. Three.', CFG, 1000);
-  assert.strictEqual(r.outcome, 'spoken');
-  assert.deepStrictEqual(finished, ['One.', 'Two.', 'Three.']);
+const answer = (say) => ({ structured_output: { say, edit: null, file: null, startLine: null, endLine: null, toCoder: null } });
+
+test('keeps one process for the session and answers in order', async () => {
+  const cli = fakeCli((text) => answer(`heard ${text}`));
+  const n = createNarrator({ command: 'claude', args: [], spawn: cli.spawn });
+  const [a, b] = await Promise.all([n.ask('one'), n.ask('two')]);
+  assert.strictEqual(a.answer.say, 'heard one');
+  assert.strictEqual(b.answer.say, 'heard two');
+  assert.strictEqual(cli.started.length, 1);
+  assert.strictEqual(n.turns, 2);
+  assert.ok(Math.abs(n.costUsd - 0.02) < 1e-9, 'the cost is the CLI\'s running total');
 });
 
-test('a pause cuts the sentence off and resume says it again from the start', async () => {
-  const { control, narrator, started, finished } = setup();
-  const p = narrator.narrate('One. Two.', CFG, 1000);
-  await tick(10);
-  control.pause();
-  await tick(60);
-  assert.deepStrictEqual(finished, [], 'nothing finishes while paused');
-  control.resume();
-  const r = await p;
-  assert.strictEqual(r.outcome, 'spoken');
-  assert.deepStrictEqual(started, ['One.', 'One.', 'Two.']);
-  assert.deepStrictEqual(finished, ['One.', 'Two.']);
+test('an error result gives no answer but the reason', async () => {
+  const cli = fakeCli(() => ({ is_error: true, result: 'not logged in' }));
+  const n = createNarrator({ command: 'claude', args: [], spawn: cli.spawn });
+  assert.deepStrictEqual(await n.ask('x'), { answer: null, error: 'not logged in' });
 });
 
-test('a pause longer than the hold limit returns "paused", and resumeHeld says the rest', async () => {
-  const { control, narrator, finished } = setup();
-  const p = narrator.narrate('One. Two. Three.', CFG, 50);
-  await tick(45); // "One." has finished; "Two." is playing
-  control.pause();
-  const r = await p;
-  assert.strictEqual(r.outcome, 'paused');
-  assert.ok(narrator.hasHeld());
-  setTimeout(() => control.resume(), 20);
-  const r2 = await narrator.resumeHeld(1000);
-  assert.strictEqual(r2.outcome, 'spoken');
-  assert.deepStrictEqual(finished, ['One.', 'Two.', 'Three.']);
+test('a narrator that never answers is given up on, and the next question starts a new one', async () => {
+  const cli = fakeCli((text, count) => (count === 1 && text === 'first' ? undefined : answer('ok')));
+  const n = createNarrator({ command: 'claude', args: [], spawn: cli.spawn, turnTimeoutMs: 30 });
+  assert.strictEqual((await n.ask('first')).answer, null);
+  assert.strictEqual((await n.ask('second')).answer.say, 'ok');
+  assert.strictEqual(cli.started.length, 2);
+  assert.ok(cli.started[0].child.killed);
 });
 
-test('resumeHeld with nothing left just waits for the engineer', async () => {
-  const { control, narrator } = setup();
-  control.pause();
-  assert.strictEqual((await narrator.resumeHeld(20)).outcome, 'paused');
-  setTimeout(() => control.resume(), 10);
-  assert.strictEqual((await narrator.resumeHeld(1000)).outcome, 'resumed');
+test('costs of a restarted narrator add up', async () => {
+  const cli = fakeCli(() => answer('ok'));
+  const n = createNarrator({ command: 'claude', args: [], spawn: cli.spawn });
+  await n.ask('a');
+  cli.started[0].child.kill();
+  await new Promise((r) => setImmediate(r));
+  await n.ask('b');
+  assert.strictEqual(cli.started.length, 2);
+  assert.ok(Math.abs(n.costUsd - 0.02) < 1e-9);
 });
 
-test('an interrupt stops the narration at once', async () => {
-  const { control, narrator, finished } = setup();
-  const p = narrator.narrate('One. Two. Three.', CFG, 1000);
-  await tick(10);
-  control.interrupt('Hold on, why there?');
-  const r = await p;
-  assert.strictEqual(r.outcome, 'interrupted');
-  assert.deepStrictEqual(finished, []);
-  assert.strictEqual(control.takeMessage(), 'Hold on, why there?');
-  assert.strictEqual(control.message, null);
+test('a CLI that is not installed is reported, not thrown', async () => {
+  const spawn = () => {
+    const child = new EventEmitter();
+    child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    setImmediate(() => child.emit('error', Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' })));
+    return child;
+  };
+  const n = createNarrator({ command: 'claude', args: [], spawn });
+  const r = await n.ask('x');
+  assert.strictEqual(r.answer, null);
+  assert.match(r.error, /not found/);
 });
 
-test('an interrupt while paused ends the pause', async () => {
-  const { control, narrator } = setup();
-  const p = narrator.narrate('One. Two.', CFG, 1000);
-  await tick(10);
-  control.pause();
-  await tick(10);
-  control.interrupt('Go deeper here.');
-  assert.strictEqual((await p).outcome, 'interrupted');
-  assert.strictEqual(control.paused, false);
-});
-
-test('an interrupt sent before the narration starts means nothing is said', async () => {
-  const { control, narrator, started } = setup();
-  control.interrupt('Wait.');
-  assert.strictEqual((await narrator.narrate('One.', CFG, 1000)).outcome, 'interrupted');
-  assert.deepStrictEqual(started, []);
-});
-
-test('skip ends the narration', async () => {
-  const { control, narrator, finished } = setup();
-  const p = narrator.narrate('One. Two.', CFG, 1000);
-  await tick(10);
-  control.skip();
-  assert.strictEqual((await p).outcome, 'skipped');
-  assert.deepStrictEqual(finished, []);
-});
-
-test('muted: nothing is played but the agent is still paced', async () => {
-  const { narrator, started, quiet } = setup({ muted: true });
-  const r = await narrator.narrate('One. Two.', CFG, 1000);
-  assert.strictEqual(r.outcome, 'spoken');
-  assert.strictEqual(r.muted, true);
-  assert.deepStrictEqual(started, []);
-  assert.strictEqual(quiet.length, 2);
-});
-
-test('muting mid-sentence says that sentence again, silently', async () => {
-  const { control, narrator, started, quiet, setMuted } = setup();
-  const p = narrator.narrate('One. Two.', CFG, 1000);
-  await tick(10);
-  setMuted(true);
-  control.stop();
-  await p;
-  assert.deepStrictEqual(started, ['One.']);
-  assert.strictEqual(quiet.length, 2);
-});
-
-test('a broken voice falls back to reading pace and reports the error', async () => {
-  const { narrator, quiet } = setup({ synthFails: true });
-  const r = await narrator.narrate('One. Two.', CFG, 1000);
-  assert.strictEqual(r.outcome, 'spoken');
-  assert.strictEqual(r.voiceError, 'voice server down');
-  assert.strictEqual(quiet.length, 2);
+test('Claude Code narrator: no tools, no MCP servers, structured answers, the default model unless one is set', () => {
+  const plain = launchFor('claude-code', { cli: '/bin/claude', model: '', systemPrompt: 'P' });
+  assert.strictEqual(plain.command, '/bin/claude');
+  const i = plain.args.indexOf('--tools');
+  assert.strictEqual(plain.args[i + 1], '');
+  assert.ok(plain.args.includes('--strict-mcp-config'));
+  assert.ok(plain.args.includes('--json-schema'));
+  assert.ok(!plain.args.includes('--model'), 'an empty setting leaves the model to the agent');
+  const set = launchFor('claude-code', { cli: '', model: 'sonnet', systemPrompt: 'P' });
+  assert.strictEqual(set.command, 'claude');
+  assert.deepStrictEqual(set.args.slice(-2), ['--model', 'sonnet']);
 });

@@ -75,36 +75,23 @@ class McpServerTest(unittest.TestCase):
             {"id": 2, "method": "tools/list"},
         )
         self.assertEqual(init["result"]["serverInfo"]["name"], "coding-tutor")
-        self.assertEqual([t["name"] for t in tools["result"]["tools"]], ["begin_session", "narrate", "wait", "end_session"])
+        self.assertEqual([t["name"] for t in tools["result"]["tools"]], ["begin_session"], "the coder no longer narrates")
 
-    def test_narrate_reaches_the_window_for_this_project(self):
+    def test_begin_session_reaches_the_window_for_this_project(self):
         self.register_window([self.project])
-        result = self.call("narrate", {"text": "Hello.", "file": "/x.py", "startLine": 2, "endLine": 3})
+        result = self.call("begin_session", {"task": "Add retries"})
         self.assertFalse(result["isError"])
-        self.assertEqual(FakeExtension.calls, [("/narrate", {"text": "Hello.", "file": "/x.py", "startLine": 2, "endLine": 3})])
+        self.assertEqual(FakeExtension.calls, [("/session/begin", {"task": "Add retries"})])
+        self.assertIn("Session started. Voice: ready.", result["content"][0]["text"])
 
     def test_works_from_a_subfolder_of_the_project(self):
         self.register_window([self.project])
-        result = self.call("narrate", {"text": "Hello."}, cwd=os.path.join(self.project, "sub"))
+        result = self.call("begin_session", {"task": "t"}, cwd=os.path.join(self.project, "sub"))
         self.assertFalse(result["isError"])
-
-    def test_begin_session_returns_the_script_with_the_default_depth(self):
-        self.register_window([self.project])
-        text = self.call("begin_session", {"task": "Add retries"})["content"][0]["text"]
-        self.assertIn("The default depth for this session is **walk**.", text)
-        self.assertNotIn("{{defaultDepth}}", text)
-
-    def test_engineers_own_script_replaces_the_default(self):
-        self.register_window([self.project])
-        os.makedirs(os.path.join(self.home.name, ".config", "coding-tutor"))
-        with open(os.path.join(self.home.name, ".config", "coding-tutor", "session-script.md"), "w") as f:
-            f.write("My script at {{defaultDepth}}.")
-        text = self.call("begin_session", {"task": "t"})["content"][0]["text"]
-        self.assertTrue(text.endswith("My script at walk."))
 
     def test_no_window_for_this_project_is_an_error_the_agent_can_relay(self):
         self.register_window([os.path.join(self.home.name, "another-project")])
-        result = self.call("narrate", {"text": "Hello."})
+        result = self.call("begin_session", {"task": "t"})
         self.assertTrue(result["isError"])
         self.assertIn("not running in a VS Code window", result["content"][0]["text"])
         self.assertEqual(FakeExtension.calls, [])
@@ -112,16 +99,11 @@ class McpServerTest(unittest.TestCase):
     def test_a_closed_window_left_behind_is_skipped(self):
         self.register_window([self.project], port=1, name="stale.json")
         self.register_window([self.project], name="live.json")
-        self.assertFalse(self.call("narrate", {"text": "Hello."})["isError"])
-
-    def test_wait_reaches_the_extension(self):
-        self.register_window([self.project])
-        self.assertFalse(self.call("wait", {})["isError"])
-        self.assertEqual(FakeExtension.calls, [("/wait", {})])
+        self.assertFalse(self.call("begin_session", {"task": "t"})["isError"])
 
     def test_wrong_token_is_reported(self):
         self.register_window([self.project], token="wrong")
-        result = self.call("narrate", {"text": "Hello."})
+        result = self.call("begin_session", {"task": "t"})
         self.assertTrue(result["isError"])
         self.assertIn("403", result["content"][0]["text"])
 

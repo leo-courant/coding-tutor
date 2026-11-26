@@ -26,3 +26,10 @@ test('finish without a recap still records the ending', () => {
   finish(file, null, new Date(2026, 10, 24, 9, 0), new Date(2026, 10, 24, 10, 5));
   assert.strictEqual(fs.readFileSync(file, 'utf8'), 'Session ended 10:05, after 1 hour 5 minutes.\n');
 });
+
+test('finish records what the narrator cost, after how long the session took', () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ct-')), 't.md');
+  fs.writeFileSync(file, '');
+  finish(file, null, new Date(2026, 10, 24, 9, 0), new Date(2026, 10, 24, 9, 20), 'Narrator: sonnet, 12 turns, $0.081.');
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), 'Session ended 09:20, after 20 minutes. Narrator: sonnet, 12 turns, $0.081.\n');
+});
